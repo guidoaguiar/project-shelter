@@ -1,0 +1,261 @@
+[
+  {
+    "id": "kiwix",
+    "category": "KNOWLEDGE",
+    "name": "KIWIX",
+    "title": "Information Library",
+    "desc": "Offline Wikipedia, medical references, repair guides and ebooks served from ZIM archives.",
+    "image": "ghcr.io/kiwix/kiwix-serve:latest",
+    "port": 8090,
+    "containerPort": 8080,
+    "volume": "/data",
+    "args": ["*.zim"],
+    "needsFiles": ".zim",
+    "note": "Place .zim archives in the data folder below before deploying.",
+    "links": [
+      { "label": "KIWIX LIBRARY", "url": "https://library.kiwix.org" },
+      { "label": "ALL ZIM FILES", "url": "https://download.kiwix.org/zim/" },
+      { "label": "WIKIPEDIA", "url": "https://download.kiwix.org/zim/wikipedia/" },
+      { "label": "WIKIMED MEDICAL", "url": "https://download.kiwix.org/zim/other/" },
+      { "label": "IFIXIT REPAIR", "url": "https://download.kiwix.org/zim/ifixit/" },
+      { "label": "GUTENBERG BOOKS", "url": "https://download.kiwix.org/zim/gutenberg/" },
+      { "label": "STACK EXCHANGE", "url": "https://download.kiwix.org/zim/stack_exchange/" }
+    ]
+  },
+  {
+    "id": "kolibri",
+    "category": "KNOWLEDGE",
+    "name": "KOLIBRI",
+    "title": "Education Platform",
+    "desc": "Offline courses and lessons with progress tracking for multiple learners.",
+    "image": "treehouses/kolibri:latest",
+    "port": 8300,
+    "containerPort": 8080,
+    "volume": "/root/.kolibri",
+    "note": "Import channels (Khan Academy and others) from inside Kolibri while you have a link.",
+    "links": [
+      { "label": "CHANNEL CATALOG", "url": "https://catalog.learningequality.org" },
+      { "label": "DOCUMENTATION", "url": "https://kolibri.readthedocs.io" }
+    ]
+  },
+  {
+    "id": "calibre-web",
+    "category": "KNOWLEDGE",
+    "name": "CALIBRE-WEB",
+    "title": "E-book Library",
+    "desc": "Browse, read and download a shelf of e-books from any device on the network.",
+    "image": "lscr.io/linuxserver/calibre-web:latest",
+    "port": 8310,
+    "containerPort": 8083,
+    "volumes": { "config": "/config", "books": "/books" },
+    "env": { "PUID": "1000", "PGID": "1000" },
+    "note": "Put a Calibre library in the books folder. Default login is admin / admin123: change it.",
+    "links": [
+      { "label": "PROJECT GUTENBERG", "url": "https://www.gutenberg.org" },
+      { "label": "STANDARD EBOOKS", "url": "https://standardebooks.org" },
+      { "label": "INTERNET ARCHIVE", "url": "https://archive.org/details/texts" }
+    ]
+  },
+  {
+    "id": "dokuwiki",
+    "category": "KNOWLEDGE",
+    "name": "DOKUWIKI",
+    "title": "Group Wiki",
+    "desc": "A wiki stored as plain text files, for the group's own procedures, plans and local knowledge.",
+    "image": "lscr.io/linuxserver/dokuwiki:latest",
+    "port": 8320,
+    "containerPort": 80,
+    "volumes": { "config": "/config" },
+    "env": { "PUID": "1000", "PGID": "1000" },
+    "links": [{ "label": "MANUAL", "url": "https://www.dokuwiki.org/manual" }]
+  },
+  {
+    "id": "ollama",
+    "category": "AI",
+    "name": "OLLAMA",
+    "title": "Local Model Server",
+    "desc": "Runs language models on this machine. Powers the Advisor module with no outside link.",
+    "image": "ollama/ollama:latest",
+    "port": 11434,
+    "containerPort": 11434,
+    "volume": "/root/.ollama",
+    "note": "After deploying, pull a model once: docker exec shelter-ollama ollama pull llama3.2:3b",
+    "links": [{ "label": "MODEL LIBRARY", "url": "https://ollama.com/library" }]
+  },
+  {
+    "id": "open-webui",
+    "category": "AI",
+    "name": "OPEN WEBUI",
+    "title": "Full Chat Workspace",
+    "desc": "A complete chat interface for local models, with document upload, chat history and multiple users.",
+    "image": "ghcr.io/open-webui/open-webui:main",
+    "port": 8400,
+    "containerPort": 8080,
+    "volumes": { "data": "/app/backend/data" },
+    "env": { "OLLAMA_BASE_URL": "http://host.docker.internal:11434" },
+    "extraHosts": ["host.docker.internal:host-gateway"],
+    "note": "Expects Ollama on this machine at port 11434. The first account created becomes the administrator.",
+    "links": [{ "label": "DOCUMENTATION", "url": "https://docs.openwebui.com" }]
+  },
+  {
+    "id": "cyberchef",
+    "category": "TOOLS",
+    "name": "CYBERCHEF",
+    "title": "Data Tools",
+    "desc": "Encoding, encryption, hashing and data analysis in the browser.",
+    "image": "ghcr.io/gchq/cyberchef:latest",
+    "port": 8100,
+    "containerPort": 80
+  },
+  {
+    "id": "it-tools",
+    "category": "TOOLS",
+    "name": "IT-TOOLS",
+    "title": "Technical Utilities",
+    "desc": "Dozens of small converters and generators: units, subnets, QR codes, timestamps, passwords.",
+    "image": "corentinth/it-tools:latest",
+    "port": 8110,
+    "containerPort": 80
+  },
+  {
+    "id": "stirling-pdf",
+    "category": "TOOLS",
+    "name": "STIRLING PDF",
+    "title": "PDF Workshop",
+    "desc": "Merge, split, compress, convert and OCR PDF documents without sending them anywhere.",
+    "image": "stirlingtools/stirling-pdf:latest",
+    "port": 8120,
+    "containerPort": 8080,
+    "volumes": { "configs": "/configs" },
+    "links": [{ "label": "DOCUMENTATION", "url": "https://docs.stirlingpdf.com" }]
+  },
+  {
+    "id": "excalidraw",
+    "category": "TOOLS",
+    "name": "EXCALIDRAW",
+    "title": "Sketch Board",
+    "desc": "A whiteboard for site plans, wiring diagrams and route sketches. Drawings save as files in the browser.",
+    "image": "excalidraw/excalidraw:latest",
+    "port": 8130,
+    "containerPort": 80
+  },
+  {
+    "id": "filebrowser",
+    "category": "VAULT",
+    "name": "FILE BROWSER",
+    "title": "Shared Files",
+    "desc": "Upload, download and organise files on this node from any browser: scans, manuals, photos, maps.",
+    "image": "filebrowser/filebrowser:latest",
+    "port": 8500,
+    "containerPort": 80,
+    "volumes": { "files": "/srv", "database": "/database", "config": "/config" },
+    "note": "The first-run admin password is printed once in the container log: docker logs shelter-filebrowser",
+    "links": [{ "label": "DOCUMENTATION", "url": "https://filebrowser.org" }]
+  },
+  {
+    "id": "vaultwarden",
+    "category": "VAULT",
+    "name": "VAULTWARDEN",
+    "title": "Password Vault",
+    "desc": "A password manager server compatible with Bitwarden apps. Keeps credentials and secure notes on your own hardware.",
+    "image": "vaultwarden/server:latest",
+    "port": 8510,
+    "containerPort": 80,
+    "volumes": { "data": "/data" },
+    "note": "The web vault only works from this machine (localhost) unless you put it behind HTTPS.",
+    "links": [{ "label": "WIKI", "url": "https://github.com/dani-garcia/vaultwarden/wiki" }]
+  },
+  {
+    "id": "gitea",
+    "category": "VAULT",
+    "name": "GITEA",
+    "title": "Code and Document Archive",
+    "desc": "Version-controlled storage for code, configuration and documents, with a web interface.",
+    "image": "gitea/gitea:latest",
+    "port": 8520,
+    "containerPort": 3000,
+    "volumes": { "data": "/data" },
+    "links": [{ "label": "DOCUMENTATION", "url": "https://docs.gitea.com" }]
+  },
+  {
+    "id": "flatnotes",
+    "category": "HOMESTEAD",
+    "name": "FLATNOTES",
+    "title": "Shared Notes",
+    "desc": "Markdown note-taking stored as plain files, for the whole group.",
+    "image": "dullage/flatnotes:latest",
+    "port": 8200,
+    "containerPort": 8080,
+    "volume": "/data",
+    "env": { "FLATNOTES_AUTH_TYPE": "none" }
+  },
+  {
+    "id": "grocy",
+    "category": "HOMESTEAD",
+    "name": "GROCY",
+    "title": "Pantry and Household",
+    "desc": "Detailed stock control: barcodes, best-before dates, shopping lists, chores and battery tracking.",
+    "image": "lscr.io/linuxserver/grocy:latest",
+    "port": 8210,
+    "containerPort": 80,
+    "volumes": { "config": "/config" },
+    "env": { "PUID": "1000", "PGID": "1000" },
+    "note": "Default login is admin / admin: change it.",
+    "links": [{ "label": "PROJECT SITE", "url": "https://grocy.info" }]
+  },
+  {
+    "id": "mealie",
+    "category": "HOMESTEAD",
+    "name": "MEALIE",
+    "title": "Recipes and Meal Plans",
+    "desc": "A recipe book and meal planner. Save recipes while you have a link and cook from them without one.",
+    "image": "ghcr.io/mealie-recipes/mealie:latest",
+    "port": 8220,
+    "containerPort": 9000,
+    "volumes": { "data": "/app/data" },
+    "links": [{ "label": "DOCUMENTATION", "url": "https://docs.mealie.io" }]
+  },
+  {
+    "id": "jellyfin",
+    "category": "MEDIA",
+    "name": "JELLYFIN",
+    "title": "Video Library",
+    "desc": "Streams your own films, training videos and recorded courses to any screen on the network.",
+    "image": "jellyfin/jellyfin:latest",
+    "port": 8096,
+    "containerPort": 8096,
+    "volumes": { "config": "/config", "cache": "/cache", "media": "/media" },
+    "note": "Copy video files into the media folder, then add /media as a library during setup.",
+    "links": [
+      { "label": "DOCUMENTATION", "url": "https://jellyfin.org/docs/" },
+      { "label": "INTERNET ARCHIVE FILMS", "url": "https://archive.org/details/movies" }
+    ]
+  },
+  {
+    "id": "audiobookshelf",
+    "category": "MEDIA",
+    "name": "AUDIOBOOKSHELF",
+    "title": "Audiobooks and Podcasts",
+    "desc": "Listen to audiobooks and downloaded podcast episodes, with progress kept per listener.",
+    "image": "ghcr.io/advplyr/audiobookshelf:latest",
+    "port": 8610,
+    "containerPort": 80,
+    "volumes": { "config": "/config", "metadata": "/metadata", "audiobooks": "/audiobooks", "podcasts": "/podcasts" },
+    "links": [
+      { "label": "LIBRIVOX", "url": "https://librivox.org" },
+      { "label": "DOCUMENTATION", "url": "https://www.audiobookshelf.org/docs" }
+    ]
+  },
+  {
+    "id": "navidrome",
+    "category": "MEDIA",
+    "name": "NAVIDROME",
+    "title": "Music Library",
+    "desc": "Streams your own music collection. Light enough to run on very small hardware.",
+    "image": "navidrome/navidrome:latest",
+    "port": 4533,
+    "containerPort": 4533,
+    "volumes": { "data": "/data", "music": "/music" },
+    "links": [{ "label": "DOCUMENTATION", "url": "https://www.navidrome.org/docs/" }]
+  }
+]
