@@ -121,6 +121,10 @@ data/                created at first run
 - Map data is Natural Earth 1:110m (public domain), via the `world-atlas` package. It is for orientation, not route planning.
 - The manual is a reference, not training, and not a substitute for professional medical care. Practise skills before you depend on them.
 
+## Support
+
+Shelter is free. If it is useful to you, you can [support its development on Ko-fi](https://ko-fi.com/W4P72AQFD2).
+
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
