@@ -29,7 +29,7 @@ Shelter has no login. Do not expose it to the internet.
 | # | Module | What it does |
 |---|---|---|
 | 01 | Command | Host telemetry, link status, grid position, sun and moon, supply readiness, configuration |
-| 02 | Manual | 40 field manual entries in 10 sections, with ranked full-text search |
+| 02 | Manual | 249 entries in 14 sections, with figures and ranked full-text search. Each section opens with short essentials, followed by full chapters |
 | 03 | Advisor | Chat with a local model, grounded in the manual and citing entries. With no model it returns the closest entries instead |
 | 04 | Map | Offline vector world map, waypoints, range and bearing from home |
 | 05 | Tools | Coordinate conversion (DD, DMS, UTM, MGRS), sun and moon times, Morse with audio, water disinfection dosing, pace and bearing, encoding and hashing |
@@ -45,6 +45,12 @@ The Advisor talks to [Ollama](https://ollama.com) at `http://127.0.0.1:11434` by
 
 Any OpenAI-compatible server (LM Studio, llama.cpp) also works: choose it under Command, Configuration, and include `/v1` in the URL.
 
+## Manual content
+
+The manual is one library in two layers. The files directly in `content/manual` are the short essentials that open each section. The 33 full chapters live in `content/manual/chapters`, one Markdown file per chapter, with their 167 figures in `content/manual/chapters/img`.
+
+All of it is plain Markdown in this repository: edit the files and commit.
+
 ## Adding to the manual
 
 Drop a Markdown file into `content/manual`. It is picked up without a restart.
@@ -59,6 +65,8 @@ The first paragraph is the summary shown in search results.
 ```
 
 The file name sets the section (`11-vehicles.md` becomes VEHICLES). Each line starting with a single `#` begins a new entry.
+
+To file entries under an existing section, or as a chapter within it, start the file with `category: WATER` and, optionally, `group: Chapter Name`. Files may also sit in a subfolder, with figures in its `img/` folder referenced as `![Caption](img/name.png)`.
 
 ## Adding your own services
 
@@ -115,4 +123,8 @@ data/                created at first run
 
 ## License
 
-Apache-2.0
+GPL-3.0-or-later. See [LICENSE](LICENSE).
+
+## Acknowledgements
+
+The manual's chapters build on US Army Field Manual FM 3-05.70 (FM 21-76), a public domain work of the US Government, and on the [SurvivalManual](https://github.com/guidoaguiar/SurvivalManual) project, itself based on [ligi/SurvivalManual](https://github.com/ligi/SurvivalManual).

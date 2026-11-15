@@ -4,7 +4,7 @@
   "description": "Offline-first survival knowledge node: field manual, local AI advisor, maps, field tools, logs, stores and a container depot.",
   "type": "module",
   "private": true,
-  "license": "Apache-2.0",
+  "license": "GPL-3.0-or-later",
   "engines": { "node": ">=20" },
   "scripts": {
     "start": "node server.js",

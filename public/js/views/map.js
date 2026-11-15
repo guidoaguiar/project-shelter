@@ -1,6 +1,6 @@
 // 04 MAP — offline vector world map with waypoints, range and bearing.
 import { h, api, saveSettings, home, toast, viewHeader, panel, kv } from '../lib/core.js';
-import { toMGRS, toDMS, rangeBearing, compassPoint } from '../lib/geo.js';
+import { toMGRS, toDMS, rangeBearing, compassPoint, parseCoord } from '../lib/geo.js';
 
 let world = null; // Path2D in lon/lat space, built once
 
@@ -152,6 +152,22 @@ export async function render(root) {
   const fmt = (p) => `${Math.abs(p.lat).toFixed(4)}${p.lat < 0 ? 'S' : 'N'} ${Math.abs(p.lon).toFixed(4)}${p.lon < 0 ? 'W' : 'E'}`;
   const rb = (p) => { const o = home(); if (!o) return '—'; const r = rangeBearing(o, p); return `${r.km < 10 ? r.km.toFixed(2) : r.km.toFixed(0)} KM / ${String(Math.round(r.bearing) % 360).padStart(3, '0')}° ${compassPoint(r.bearing)}`; };
 
+  // Typed coordinates: built once so the text survives side-panel repaints.
+  const coordIn = h('input', { placeholder: '38.8977, -77.0365', 'aria-label': 'Coordinates to mark', autocomplete: 'off', spellcheck: 'false' });
+  const entry = panel('ENTER COORDINATES', 'CRD', h('form.pb', {
+    onsubmit: (e) => {
+      e.preventDefault();
+      const p = parseCoord(coordIn.value);
+      if (!p) { toast('COORDINATE NOT RECOGNISED', true); return; }
+      mark = p;
+      view.lon = p.lon; view.lat = p.lat;
+      if (view.scale < 40) view.scale = 40;
+      clamp(); paintSide(); draw();
+    },
+  },
+    h('div.row', { style: 'flex-wrap:nowrap' }, coordIn, h('button.btn.primary', 'MARK')),
+    h('p.hint', { style: 'margin:8px 0 0' }, 'Decimal degrees, or degrees-minutes-seconds with N/S/E/W, such as 38°53\'51"N 77°02\'11"W. The point is marked and centred; then save it as a waypoint or set it as home.')));
+
   function paintSide() {
     const name = h('input', { placeholder: 'WAYPOINT NAME', maxlength: 40 });
     const markPanel = mark ? h('div.pb',
@@ -169,7 +185,7 @@ export async function render(root) {
           try { await saveSettings({ lat: +mark.lat.toFixed(6), lon: +mark.lon.toFixed(6) }); toast('HOME POSITION SET'); mark = null; paintSide(); draw(); } catch (err) { toast(err.message, true); }
         } }, 'SET AS HOME'),
         h('button.btn.ghost', { onclick: () => { mark = null; paintSide(); draw(); } }, 'CLEAR')))
-      : h('div.pb', h('div.empty', 'NO POINT SELECTED'), h('p.hint', 'Click the map to mark a point, then save it as a waypoint or set it as your home position.'));
+      : h('div.pb', h('div.empty', 'NO POINT SELECTED'), h('p.hint', 'Type coordinates above or click the map to mark a point, then save it as a waypoint or set it as your home position.'));
 
     const list = waypoints.length ? h('div.scroll-x', h('table.t', h('tbody', waypoints.map((w) => h('tr',
       h('td', h('div', String(w.name).toUpperCase()), h('div.hint', rb(w))),
@@ -181,6 +197,8 @@ export async function render(root) {
       : h('div.empty', 'NO WAYPOINTS');
 
     side.replaceChildren(
+      entry,
+      h('div', { style: 'height:14px' }),
       panel('SELECTED POINT', 'MRK', markPanel),
       h('div', { style: 'height:14px' }),
       panel('WAYPOINTS', String(waypoints.length).padStart(2, '0'), h('div.pb.flush', list)));

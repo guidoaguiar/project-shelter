@@ -28,7 +28,7 @@ const depot = new Depot(path.join(ROOT, 'config', 'depot.json'), DATA, LOOPBACK_
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
+  '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.ico': 'image/x-icon',
   '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8',
 };
 const SECURITY = {
@@ -98,7 +98,7 @@ async function api(req, res, url) {
 
   if (method === 'GET' && p === '/api/manual') return send(res, 200, manual.index());
   if (method === 'GET' && p === '/api/search') return send(res, 200, manual.search(url.searchParams.get('q') || '', 12));
-  if (method === 'GET' && (m = p.match(/^\/api\/manual\/([a-z0-9-]+)$/))) {
+  if (method === 'GET' && (m = p.match(/^\/api\/manual\/([a-z0-9-]{1,200})$/))) {
     const a = manual.get(m[1]);
     if (!a) throw fail(404, 'no such entry');
     return send(res, 200, a);
@@ -146,10 +146,10 @@ async function chat(req, res) {
 
   res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store', ...SECURITY });
   const emit = (o) => res.write(JSON.stringify(o) + '\n');
-  // Keep only entries that score close to the best match, so weak hits are not cited.
-  const ranked = manual.search(question.content, 3);
-  const hits = ranked.filter((x) => x.score >= ranked[0].score * 0.55);
-  emit({ type: 'sources', items: hits.map(({ id, title, category, summary }) => ({ id, title, category, summary })) });
+  // Ground the answer in the best-matching passages; cite each article once.
+  const passages = manual.passages(question.content, 4);
+  const cited = [...new Map(passages.map((x) => [x.article.id, x.article])).values()];
+  emit({ type: 'sources', items: cited.map(({ id, title, category, summary }) => ({ id, title, category, summary })) });
 
   const ai = settings.value.ai;
   const status = await aiStatus(ai);
@@ -161,7 +161,7 @@ async function chat(req, res) {
   const abort = new AbortController();
   res.on('close', () => abort.abort());
   try {
-    const system = buildPrompt(hits.map((x) => manual.articles.find((a) => a.id === x.id)));
+    const system = buildPrompt(passages);
     await streamChat(ai, model, [{ role: 'system', content: system }, ...history], (text) => emit({ type: 'delta', text }), abort.signal);
     emit({ type: 'done', model });
   } catch (e) {
@@ -170,13 +170,7 @@ async function chat(req, res) {
   res.end();
 }
 
-function serveStatic(req, res, url) {
-  if (req.method !== 'GET' && req.method !== 'HEAD') throw fail(405, 'method not allowed');
-  let rel;
-  try { rel = decodeURIComponent(url.pathname); } catch { throw fail(400, 'bad path'); }
-  if (rel.endsWith('/')) rel += 'index.html';
-  const file = path.join(PUBLIC, rel);
-  if (file !== PUBLIC && !file.startsWith(PUBLIC + path.sep)) throw fail(403, 'forbidden');
+function sendFile(req, res, file) {
   fs.stat(file, (err, st) => {
     if (err || !st.isFile()) return send(res, 404, { error: 'not found' });
     res.writeHead(200, {
@@ -186,6 +180,23 @@ function serveStatic(req, res, url) {
     if (req.method === 'HEAD') return res.end();
     fs.createReadStream(file).pipe(res);
   });
+}
+
+function serveStatic(req, res, url) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') throw fail(405, 'method not allowed');
+  // Figures stored beside manual content: /content/<folder>/img/<file>
+  const fig = url.pathname.match(/^\/content\/([a-z0-9][a-z0-9-]*)\/img\/([A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpe?g|gif|webp))$/);
+  if (fig) {
+    const dir = manual.imageDir(fig[1]);
+    if (!dir) throw fail(404, 'not found');
+    return sendFile(req, res, path.join(dir, fig[2]));
+  }
+  let rel;
+  try { rel = decodeURIComponent(url.pathname); } catch { throw fail(400, 'bad path'); }
+  if (rel.endsWith('/')) rel += 'index.html';
+  const file = path.join(PUBLIC, rel);
+  if (file !== PUBLIC && !file.startsWith(PUBLIC + path.sep)) throw fail(403, 'forbidden');
+  sendFile(req, res, file);
 }
 
 const server = http.createServer(async (req, res) => {

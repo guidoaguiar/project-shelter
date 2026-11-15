@@ -62,8 +62,8 @@ export async function streamChat(ai, model, messages, onDelta, signal) {
   }
 }
 
-export function buildPrompt(hits) {
-  const context = hits.map((a) => `### ${a.title} [${a.category}]\n${a.body.slice(0, 2200)}`).join('\n\n');
+export function buildPrompt(passages) {
+  const context = passages.map((p) => `### ${p.article.title}${p.heading ? ' — ' + p.heading : ''} [${p.article.category}]\n${p.text}`).join('\n\n');
   return [
     'You are SHELTER ADVISOR, an offline field assistant for survival, self-reliance and preparedness.',
     'Answer concisely and practically. Use numbered steps for procedures.',

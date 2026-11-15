@@ -240,3 +240,40 @@ table.t .num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 @media (max-width: 480px) { .led { font-size: 0; gap: 0; } .leds { gap: 6px; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* ---------- manual: collections, figures, links ---------- */
+.list details > summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.list details > summary::-webkit-details-marker { display: none; }
+.list details > summary::before { content: "+"; color: var(--faint); margin-right: 8px; }
+.list details[open] > summary::before { content: "−"; }
+.list details > summary span:first-child { flex: 1; }
+.list details > summary .n { color: var(--faint); letter-spacing: .08em; }
+.list details > summary:hover { background: var(--raise); }
+.list .t3 { font-size: 9px; letter-spacing: .14em; color: var(--faint); margin-top: 2px; }
+.list-scroll { max-height: calc(100dvh - 290px); }
+.colcard { font: inherit; color: var(--text); text-align: left; background: var(--bg); border: 1px solid var(--line2); padding: 12px 14px; cursor: pointer; }
+.colcard:hover { border-color: var(--accent); }
+.colcard .lbl { font-size: 9px; letter-spacing: .2em; color: var(--dim); }
+.colcard .name { font-size: 14px; letter-spacing: .2em; font-weight: 600; margin: 6px 0; }
+.colcard .desc { font: 13px/1.5 var(--sans); color: var(--dim); }
+.article-foot { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--line); max-width: 74ch; }
+.article-foot .hint { margin: 12px 0 0; }
+.prose a { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.prose a:hover { color: var(--text); }
+.prose h4 { font: 600 14px/1.4 var(--sans); margin: 16px 0 6px; }
+.prose li > ul, .prose li > ol { margin: 5px 0 2px; }
+.prose blockquote p + p { margin-top: 8px; }
+.prose blockquote ul, .prose blockquote ol { margin: 8px 0 0; }
+.prose figure { margin: 18px 0; }
+.prose .fig { display: inline-block; max-width: 100%; background: var(--text); isolation: isolate; border: 1px solid var(--line2); }
+.prose .fig img { display: block; max-width: 100%; height: auto; filter: invert(1); mix-blend-mode: multiply; }
+:root[data-theme="day"] .prose .fig { background: var(--raise); }
+:root[data-theme="day"] .prose .fig img { filter: none; }
+.prose figcaption { font: 10px/1.5 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--dim); margin-top: 6px; }
+
+/* ---------- manual: chapters inside sections ---------- */
+.list details.grp > summary { padding: 7px 12px 7px 22px; font-size: 9px; letter-spacing: .18em; color: var(--dim); border-bottom: 1px solid var(--line); }
+.list details.grp > a { padding-left: 22px; }
+a.colcard { display: block; text-decoration: none; }
+.colcard .name { margin: 0 0 4px; }
+.colcard .desc { margin-top: 8px; font-size: 12px; }
