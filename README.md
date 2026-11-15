@@ -1,5 +1,7 @@
 # SHELTER
 
+<img width="1718" height="955" alt="image" src="https://github.com/user-attachments/assets/407579a5-04bf-44d2-88b6-b29b1159a492" />
+
 An offline-first survival knowledge node. It runs on hardware you own and keeps working when the network does not: a field manual of practical skills, a local AI advisor, a world map, field calculators, a log, a supply inventory, and a depot of optional containerized services.
 
 Inspired by [Project N.O.M.A.D.](https://github.com/crosstalk-solutions/project-nomad). Shelter is an independent project and shares no code with it.
