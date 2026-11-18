@@ -1,10 +1,51 @@
+<div align="center">
+
 # SHELTER
 
-<img width="1718" height="955" alt="image" src="https://github.com/user-attachments/assets/407579a5-04bf-44d2-88b6-b29b1159a492" />
+**A survival computer that keeps working when the internet doesn't.**
 
-An offline-first survival knowledge node. It runs on hardware you own and keeps working when the network does not: a field manual of practical skills, a local AI advisor, a world map, field calculators, a log, a supply inventory, and a depot of optional containerized services.
+A field manual, a local AI advisor, an offline map and field tools that run on hardware you own: an old laptop, a mini PC or a home server. No cloud and no accounts, and after install no internet.
 
-Inspired by [Project N.O.M.A.D.](https://github.com/crosstalk-solutions/project-nomad). Shelter is an independent project and shares no code with it.
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+![Runs on Linux, macOS, Windows](https://img.shields.io/badge/runs%20on-Linux%20%7C%20macOS%20%7C%20Windows-informational)
+![Docker](https://img.shields.io/badge/docker-one%20container-2496ED?logo=docker&logoColor=white)
+![Offline first](https://img.shields.io/badge/offline-first-success)
+[![GitHub stars](https://img.shields.io/github/stars/guidoaguiar/project-shelter?style=social)](https://github.com/guidoaguiar/project-shelter/stargazers)
+
+[Install](#install) · [Modules](#modules) · [Local AI](#local-ai) · [Add your own content](#adding-to-the-manual)
+
+</div>
+
+<img width="1718" height="955" alt="The Shelter interface: Command module with host telemetry, link status, sun and moon, and supply readiness" src="https://github.com/user-attachments/assets/407579a5-04bf-44d2-88b6-b29b1159a492" />
+
+## Why Shelter
+
+- **249-entry survival manual**, with 167 figures and ranked full-text search: water, fire, shelter, food, navigation, medical, signals and more.
+- **A local AI advisor that cites its sources.** It answers from the manual and links the entries it used. With no model installed, it still returns the closest entries.
+- **An offline world map** with waypoints, plus range and bearing from home.
+- **Field tools:** UTM and MGRS conversion, sun and moon times, Morse with audio, water disinfection dosing, pace counts.
+- **Supply tracking** that tells you how many days of food and water you have and warns before items expire.
+- **A one-click Depot** for 19 more offline services: Kiwix (offline Wikipedia), Kolibri, Calibre-Web, Open WebUI and others.
+- **Night-vision mode:** a red-only display that preserves your dark adaptation.
+- **Small and hackable:** one container, a zero-dependency Node server, no build step, and the whole manual is Markdown you can edit.
+
+### Try it in one line
+
+```
+curl -fsSL https://raw.githubusercontent.com/guidoaguiar/project-shelter/main/install/install.sh -o install.sh && sudo bash install.sh
+```
+
+Then open http://localhost:4077. That is Linux; the macOS and Windows commands, and a way to read the script before running it, are under [Install](#install).
+
+### Shelter and Project N.O.M.A.D.
+
+Shelter was inspired by [Project N.O.M.A.D.](https://github.com/crosstalk-solutions/project-nomad). It is an independent project and shares no code with it. Shelter's focus:
+
+- **Knowledge built in.** The survival manual, the AI advisor grounded in it, the map and the field tools all work out of the box. Extra services are optional.
+- **Runs where you already are.** One-line installers for Linux, macOS and Windows, or `node server.js` with no dependencies at all.
+- **Plain files.** Your notes, supplies and waypoints live in a data folder you can copy to back up. The manual is Markdown in this repository.
+
+> **Note:** The manual is a reference, not a substitute for training or professional medical care. Shelter has no login, so do not expose it to the internet.
 
 ## Install
 
@@ -47,6 +88,8 @@ curl -fsSL https://raw.githubusercontent.com/guidoaguiar/project-shelter/main/in
 ```
 powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/guidoaguiar/project-shelter/main/install/install.ps1 | iex"
 ```
+
+Prefer to read the script before running it? The commands above download it first; on Linux and macOS you can open `install.sh` before the `sudo bash` step, or read [install/install.sh](install/install.sh) and [install/install.ps1](install/install.ps1) here.
 
 When the installer finishes, open http://localhost:4077. Shelter starts again on its own after a reboot. On macOS and Windows that requires Docker Desktop to start at sign-in, which is its default.
 
@@ -230,6 +273,10 @@ data/                created at first run (from source)
 - The only outbound traffic is the uplink probe (a bare TCP connection) and whatever you deploy or download yourself.
 - Map data is Natural Earth 1:110m (public domain), via the `world-atlas` package. It is for orientation, not route planning.
 - The manual is a reference, not training, and not a substitute for professional medical care. Practise skills before you depend on them.
+
+## Contributing
+
+New manual entries, corrections, Depot services and bug reports are all welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Support
 
