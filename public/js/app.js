@@ -48,9 +48,9 @@ async function route() {
     view.replaceChildren(root);
     cleanup = result || null;
     document.title = `${known[1]} // SHELTER`;
-  } catch (e) {
+  } catch (error) {
     if (mine !== token) return;
-    view.replaceChildren(h('div.banner', h('b', 'FAULT'), `Module failed to load: ${e.message}`));
+    view.replaceChildren(h('div.banner', h('b', 'FAULT'), `Module failed to load: ${error.message}`));
   }
 }
 window.addEventListener('hashchange', route);
@@ -79,11 +79,11 @@ onStatus(() => {
   $('status-right').textContent = `MANUAL ${s.manual.articles} ENTRIES // V${s.server.version}`;
 });
 
-(async function boot() {
-  tick();
-  setInterval(tick, 1000);
-  try { state.settings = await api('/api/settings'); } catch (e) { toast(e.message, true); }
-  await refreshStatus();
-  setInterval(refreshStatus, 5000);
-  if (!location.hash) location.hash = '#/command'; else route();
-})();
+// ----- boot -----
+tick();
+setInterval(tick, 1000);
+try { state.settings = await api('/api/settings'); } catch (error) { toast(error.message, true); }
+await refreshStatus();
+setInterval(refreshStatus, 5000);
+if (location.hash) await route();
+else location.hash = '#/command'; // the hashchange listener routes

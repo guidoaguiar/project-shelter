@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (Sonar way rules)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
+  test:
+    name: Test (node ${{ matrix.node }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        node: [20, 22, 24]
+        include:
+          - os: windows-latest
+            node: 22
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+      # No `npm ci` on purpose: the tests run on Node alone, which also proves Shelter needs no packages.
+      - run: node --test
+        env:
+          SHELTER_NET_CHECK: 'off'
+
+  # The one check branch protection requires, so the job list above can change freely.
+  ci-passed:
+    name: CI passed
+    if: always()
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All jobs succeeded
+        run: |
+          echo "lint: ${{ needs.lint.result }}, test: ${{ needs.test.result }}"
+          test "${{ needs.lint.result }}" = success && test "${{ needs.test.result }}" = success

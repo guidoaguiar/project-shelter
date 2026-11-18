@@ -10,6 +10,7 @@ import { Collection, Settings } from './server/store.js';
 import { systemStatus } from './server/system.js';
 import { aiStatus, streamChat, buildPrompt } from './server/ai.js';
 import { Depot } from './server/depot.js';
+import { Maps, MAX_TILES, decompress } from './server/maps.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -31,6 +32,7 @@ fs.mkdirSync(DATA, { recursive: true });
 const manual = new Manual(path.join(ROOT, 'content', 'manual'));
 const settings = new Settings(path.join(DATA, 'settings.json'));
 const collections = Object.fromEntries(['notes', 'stores', 'waypoints'].map((n) => [n, new Collection(path.join(DATA, `${n}.json`))]));
+const maps = new Maps(path.join(DATA, 'maps'));
 const depot = new Depot(path.join(ROOT, 'config', 'depot.json'), DATA, LOOPBACK_ONLY ? '127.0.0.1' : '0.0.0.0', {
   // When Shelter runs in a container, Docker resolves bind mounts on the host, so it needs host paths.
   hostDataDir: process.env.SHELTER_HOST_DATA || '',
@@ -49,7 +51,12 @@ const SECURITY = {
 };
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
-const isLoopback = (req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+// IPv4 clients of a dual-stack socket show up as IPv4-mapped IPv6 addresses ("::ffff:a.b.c.d").
+const MAPPED_V4 = '::ffff:';
+const isLoopback = (req) => {
+  const addr = req.socket.remoteAddress || '';
+  return ['127.0.0.1', '::1'].includes(addr.startsWith(MAPPED_V4) ? addr.slice(MAPPED_V4.length) : addr);
+};
 const canAdmin = (req) => isLoopback(req) || REMOTE_ADMIN || BEHIND_LOCAL_PUBLISH;
 
 function send(res, status, body) {
@@ -79,71 +86,111 @@ function readBody(req) {
 // In loopback mode, reject requests addressed to any other hostname (DNS-rebinding guard).
 function hostAllowed(req) {
   if (!LOOPBACK_ONLY) return true;
-  const host = (req.headers.host || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+  const host = (req.headers.host || '').replace(/:\d+$/, '').replaceAll(/^\[|\]$/g, '');
   return ['localhost', '127.0.0.1', '::1'].includes(host);
 }
 
-async function api(req, res, url) {
-  const { method } = req;
-  const p = url.pathname;
-  // Writes must be JSON, which forces a CORS preflight for cross-site pages (and none is granted).
-  if (method !== 'GET' && !(req.headers['content-type'] || '').startsWith('application/json')) throw fail(415, 'JSON required');
-  let m;
+/** Request body without an "id": records get their id from the URL or the store, never from the client. */
+async function bodyWithoutId(req) {
+  const body = await readBody(req);
+  delete body.id;
+  return body;
+}
 
-  if (method === 'GET' && p === '/api/status') {
-    const [ai, docker] = await Promise.all([aiStatus(settings.value.ai), depot.docker()]);
-    const cats = new Set(manual.index().map((a) => a.category));
-    return send(res, 200, {
-      ...systemStatus(DATA),
-      ai: { online: ai.online, models: ai.models, error: ai.error, provider: settings.value.ai.provider, model: settings.value.ai.model || ai.models[0] || '' },
-      docker,
-      manual: { articles: manual.articles.length, categories: cats.size },
-      server: { port: PORT, lanMode: !LOOPBACK_ONLY, version: '0.1.0' },
-      time: new Date().toISOString(),
-    });
-  }
+function requireAdmin(req, message) {
+  if (!canAdmin(req)) throw fail(403, message);
+}
+const MAP_ADMIN = 'map downloads are only available from the host machine';
 
-  if (p === '/api/settings') {
-    if (method === 'GET') return send(res, 200, settings.public());
-    if (method === 'PUT') return send(res, 200, settings.update(await readBody(req)));
-  }
+async function status(req, res) {
+  const [ai, docker] = await Promise.all([aiStatus(settings.value.ai), depot.docker()]);
+  const cats = new Set(manual.index().map((a) => a.category));
+  send(res, 200, {
+    ...systemStatus(DATA),
+    ai: { online: ai.online, models: ai.models, error: ai.error, provider: settings.value.ai.provider, model: settings.value.ai.model || ai.models[0] || '' },
+    docker,
+    manual: { articles: manual.articles.length, categories: cats.size },
+    server: { port: PORT, lanMode: !LOOPBACK_ONLY, version: '0.1.0' },
+    time: new Date().toISOString(),
+  });
+}
 
-  if (method === 'GET' && p === '/api/manual') return send(res, 200, manual.index());
-  if (method === 'GET' && p === '/api/search') return send(res, 200, manual.search(url.searchParams.get('q') || '', 12));
-  if (method === 'GET' && (m = p.match(/^\/api\/manual\/([a-z0-9-]{1,200})$/))) {
-    const a = manual.get(m[1]);
+async function hash(req, res) {
+  const { text = '', algo = 'sha256' } = await readBody(req);
+  if (!['md5', 'sha1', 'sha256', 'sha512'].includes(algo)) throw fail(400, 'unsupported algorithm');
+  send(res, 200, { hash: crypto.createHash(algo).update(String(text), 'utf8').digest('hex') });
+}
+
+const DB = '^/api/db/(notes|stores|waypoints)';
+const DB_ITEM = new RegExp(`${DB}/([0-9a-f-]{36})$`);
+
+/**
+ * [method, path, handler]. path is a string for an exact match or a RegExp whose groups are passed
+ * to the handler after { req, res, url }. The first route matching both method and path wins.
+ */
+const ROUTES = [
+  ['GET', '/api/status', ({ req, res }) => status(req, res)],
+  ['GET', '/api/settings', ({ res }) => send(res, 200, settings.public())],
+  ['PUT', '/api/settings', async ({ req, res }) => send(res, 200, settings.update(await readBody(req)))],
+
+  ['GET', '/api/manual', ({ res }) => send(res, 200, manual.index())],
+  ['GET', '/api/search', ({ res, url }) => send(res, 200, manual.search(url.searchParams.get('q') || '', 12))],
+  ['GET', /^\/api\/manual\/([a-z0-9-]{1,200})$/, ({ res }, id) => {
+    const a = manual.get(id);
     if (!a) throw fail(404, 'no such entry');
-    return send(res, 200, a);
+    send(res, 200, a);
+  }],
+
+  ['GET', new RegExp(`${DB}$`), ({ res }, name) => send(res, 200, collections[name].all())],
+  ['POST', new RegExp(`${DB}$`), async ({ req, res }, name) => send(res, 201, collections[name].upsert(await bodyWithoutId(req)))],
+  ['PUT', DB_ITEM, async ({ req, res }, name, id) => {
+    const item = collections[name].upsert(await bodyWithoutId(req), id);
+    if (!item) throw fail(404, 'not found');
+    send(res, 200, item);
+  }],
+  ['DELETE', DB_ITEM, ({ res }, name, id) => send(res, 200, { ok: collections[name].remove(id) })],
+
+  ['POST', '/api/hash', ({ req, res }) => hash(req, res)],
+  ['POST', '/api/chat', ({ req, res }) => chat(req, res)],
+
+  ['GET', /^\/api\/maps\/tile\/(\d{1,2})\/(\d{1,6})\/(\d{1,6})$/, ({ req, res }, z, x, y) => mapTile(req, res, +z, +x, +y)],
+  ['GET', '/api/maps', async ({ req, res }) => send(res, 200, { archives: await maps.scan(), job: maps.status(), canAdmin: canAdmin(req), maxTiles: MAX_TILES })],
+  ['POST', '/api/maps/download', async ({ req, res }) => {
+    requireAdmin(req, MAP_ADMIN);
+    send(res, 202, maps.download(await readBody(req)));
+  }],
+  ['POST', '/api/maps/cancel', ({ req, res }) => {
+    requireAdmin(req, MAP_ADMIN);
+    maps.cancel();
+    send(res, 200, { ok: true });
+  }],
+  ['DELETE', /^\/api\/maps\/([A-Za-z0-9][A-Za-z0-9._-]*\.pmtiles)$/, async ({ req, res }, file) => {
+    requireAdmin(req, 'map files can only be removed from the host machine');
+    await maps.remove(file);
+    send(res, 200, { ok: true });
+  }],
+
+  ['GET', '/api/depot', async ({ req, res }) => send(res, 200, { ...(await depot.list()), canAdmin: canAdmin(req) })],
+  ['POST', /^\/api\/depot\/([a-z0-9-]+)\/(start|stop|remove)$/, async ({ req, res }, id, action) => {
+    requireAdmin(req, 'depot control is only available from the host machine');
+    send(res, 200, await depot.action(id, action));
+  }],
+];
+
+/** Path parameters when the route matches this request, else null. */
+function matchRoute([method, path], req, pathname) {
+  if (method !== req.method) return null;
+  if (typeof path === 'string') return path === pathname ? [] : null;
+  return path.exec(pathname)?.slice(1) ?? null;
+}
+
+function api(req, res, url) {
+  // Writes must be JSON, which forces a CORS preflight for cross-site pages (and none is granted).
+  if (req.method !== 'GET' && !(req.headers['content-type'] || '').startsWith('application/json')) throw fail(415, 'JSON required');
+  for (const route of ROUTES) {
+    const params = matchRoute(route, req, url.pathname);
+    if (params) return route[2]({ req, res, url }, ...params);
   }
-
-  if ((m = p.match(/^\/api\/db\/(notes|stores|waypoints)(?:\/([0-9a-f-]{36}))?$/))) {
-    const col = collections[m[1]];
-    const id = m[2];
-    if (method === 'GET' && !id) return send(res, 200, col.all());
-    if (method === 'POST' && !id) { const { id: _i, ...body } = await readBody(req); return send(res, 201, col.upsert(body)); }
-    if (method === 'PUT' && id) {
-      const { id: _i, ...body } = await readBody(req);
-      const item = col.upsert(body, id);
-      if (!item) throw fail(404, 'not found');
-      return send(res, 200, item);
-    }
-    if (method === 'DELETE' && id) return send(res, 200, { ok: col.remove(id) });
-  }
-
-  if (method === 'POST' && p === '/api/hash') {
-    const { text = '', algo = 'sha256' } = await readBody(req);
-    if (!['md5', 'sha1', 'sha256', 'sha512'].includes(algo)) throw fail(400, 'unsupported algorithm');
-    return send(res, 200, { hash: crypto.createHash(algo).update(String(text), 'utf8').digest('hex') });
-  }
-
-  if (method === 'POST' && p === '/api/chat') return chat(req, res);
-
-  if (method === 'GET' && p === '/api/depot') return send(res, 200, { ...(await depot.list()), canAdmin: canAdmin(req) });
-  if (method === 'POST' && (m = p.match(/^\/api\/depot\/([a-z0-9-]+)\/(start|stop|remove)$/))) {
-    if (!canAdmin(req)) throw fail(403, 'depot control is only available from the host machine');
-    return send(res, 200, await depot.action(m[1], m[2]));
-  }
-
   throw fail(404, 'no such endpoint');
 }
 
@@ -176,10 +223,23 @@ async function chat(req, res) {
     const system = buildPrompt(passages);
     await streamChat(ai, model, [{ role: 'system', content: system }, ...history], (text) => emit({ type: 'delta', text }), abort.signal);
     emit({ type: 'done', model });
-  } catch (e) {
-    if (!abort.signal.aborted) emit({ type: 'error', message: e.message });
+  } catch (error) {
+    if (!abort.signal.aborted) emit({ type: 'error', message: error.message });
   }
   res.end();
+}
+
+// Vector tile bytes. Gzip tiles pass through with Content-Encoding; others are inflated here.
+async function mapTile(req, res, z, x, y) {
+  if (z > 15 || x >= 2 ** z || y >= 2 ** z) throw fail(400, 'bad tile');
+  const t = await maps.tile(z, x, y);
+  if (!t) { res.writeHead(204, { 'cache-control': 'no-store', ...SECURITY }); return res.end(); }
+  const headers = { 'content-type': 'application/vnd.mapbox-vector-tile', 'cache-control': 'no-cache', ...SECURITY };
+  let body = t.data;
+  if (t.compression === 2 && /\bgzip\b/.test(req.headers['accept-encoding'] || '')) headers['content-encoding'] = 'gzip';
+  else body = decompress(t.data, t.compression);
+  res.writeHead(200, { ...headers, 'content-length': body.length });
+  res.end(body);
 }
 
 function sendFile(req, res, file) {
@@ -214,13 +274,13 @@ function serveStatic(req, res, url) {
 const server = http.createServer(async (req, res) => {
   try {
     if (!hostAllowed(req)) throw fail(403, 'host not allowed');
-    const url = new URL(req.url, 'http://shelter.local');
+    const url = new URL(req.url, 'http://localhost'); // base only for parsing the path and query
     if (url.pathname.startsWith('/api/')) await api(req, res, url);
     else serveStatic(req, res, url);
-  } catch (e) {
+  } catch (error) {
     if (res.headersSent) return res.end();
-    if (!e.status) console.error(e);
-    send(res, e.status || 500, { error: e.status ? e.message : 'internal error' });
+    if (!error.status) console.error(error);
+    send(res, error.status || 500, { error: error.status ? error.message : 'internal error' });
   }
 });
 

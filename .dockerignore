@@ -8,3 +8,7 @@ install
 *.log
 Dockerfile
 compose*.yaml
+test
+eslint.config.js
+jsconfig.json
+package-lock.json

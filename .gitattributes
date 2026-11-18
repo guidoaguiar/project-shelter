@@ -5,3 +5,10 @@ Dockerfile text eol=lf
 *.yaml text eol=lf
 *.png binary
 *.jpg binary
+
+# Development files: left out of the archives the installers download.
+/.github export-ignore
+/test export-ignore
+/eslint.config.js export-ignore
+/jsconfig.json export-ignore
+/package-lock.json export-ignore

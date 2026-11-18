@@ -5,9 +5,25 @@
   "type": "module",
   "private": true,
   "license": "GPL-3.0-or-later",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server.js",
-    "lan": "node server.js --lan"
+    "lan": "node server.js --lan",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "node --test",
+    "test:coverage": "node --test --experimental-test-coverage",
+    "check": "npm run lint && npm test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.15.0",
+    "eslint-plugin-sonarjs": "^4.2.2",
+    "eslint-plugin-unicorn": "^80.0.0",
+    "globals": "^17.14.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.73.0"
   }
 }

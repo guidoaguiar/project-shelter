@@ -8,7 +8,10 @@ let last = snapshot();
 
 function snapshot() {
   let idle = 0, total = 0;
-  for (const c of os.cpus()) { for (const v of Object.values(c.times)) total += v; idle += c.times.idle; }
+  for (const c of os.cpus()) {
+    for (const v of Object.values(c.times)) total += v;
+    idle += c.times.idle;
+  }
   return { idle, total };
 }
 
@@ -29,7 +32,7 @@ function probe() {
   sock.once('timeout', () => done(false));
   sock.once('error', () => done(false));
 }
-if (uplink.enabled) { probe(); setInterval(probe, 60000).unref(); }
+if (uplink.enabled) { probe(); setInterval(probe, 60_000).unref(); }
 
 export function systemStatus(dataDir) {
   let disk = null;
