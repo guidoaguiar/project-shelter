@@ -3,39 +3,61 @@ import { h, api, toast, viewHeader } from '../lib/core.js';
 
 let filter = 'ALL';
 
+function statusTag(s) {
+  if (s.job?.state === 'working') return h('span.tag.acc', s.job.message);
+  if (s.container?.state === 'running') return h('span.tag.ok', 'RUNNING');
+  if (s.container) return h('span.tag', s.container.state);
+  return h('span.tag', 'NOT DEPLOYED');
+}
+
+/** OPEN + STOP for a running service, else START (or DEPLOY the first time); REMOVE once a container exists. */
+function controls(s, off, act) {
+  const start = h('button.btn.primary', { disabled: off, onclick: () => act(s.id, 'start') }, s.container ? 'START' : 'DEPLOY');
+  const main = s.container?.state === 'running'
+    ? [h('a.btn.primary', { href: `http://${location.hostname}:${s.port}`, target: '_blank', rel: 'noopener', style: 'text-decoration:none' }, 'OPEN'),
+      h('button.btn', { disabled: off, onclick: () => act(s.id, 'stop') }, 'STOP')]
+    : start;
+  const remove = () => {
+    if (confirm(`Remove the ${s.name} container? Its data folder is kept.`)) return act(s.id, 'remove');
+  };
+  return h('div.row', main,
+    s.container ? h('button.btn.danger', { disabled: off, title: 'Removes the container. Data on disk is kept.', onclick: remove }, 'REMOVE') : null);
+}
+
+function card(s, docker, canAdmin, act) {
+  const off = !docker.online || !canAdmin || s.job?.state === 'working';
+  return h('section.panel.s4.col', h('div.ph', h('span', s.title.toUpperCase()), statusTag(s)),
+    h('div.pb.svc',
+      h('h3', s.name), h('div.sub', `${s.category} // PORT ${s.port}${s.custom ? ' // CUSTOM' : ''}`),
+      h('p', s.desc),
+      s.note ? h('p', { style: 'font-size:12px' }, s.note) : null,
+      s.links.length ? h('div.links', h('span.hint', 'SOURCES'),
+        s.links.map((l) => h('a.tag', { href: l.url, target: '_blank', rel: 'noopener noreferrer', title: l.url }, l.label))) : null,
+      h('div.meta', s.image, s.dataDir ? h('div', `DATA  ${s.dataDir}`) : null),
+      s.job?.state === 'error' ? h('div.banner', h('b', 'FAULT'), s.job.message) : null,
+      controls(s, off, act)));
+}
+
+/** Services under a tab: ALL, ACTIVE (has a container) or one category. */
+function servicesIn(services, tab) {
+  if (tab === 'ALL') return services;
+  if (tab === 'ACTIVE') return services.filter((s) => s.container);
+  return services.filter((s) => s.category === tab);
+}
+
+function bannerFor(d) {
+  if (!d.docker.online) return h('div.banner', h('b', 'DOCKER OFFLINE'), 'The Docker engine is not running on this node. Start Docker to deploy services. Everything else in Shelter works without it.');
+  if (!d.canAdmin) return h('div.banner', h('b', 'READ ONLY'), 'Services can only be deployed or stopped from the host machine itself.');
+  return null;
+}
+
 export async function render(root) {
   const banner = h('div'), tabs = h('div.tabs', { role: 'tablist' }), grid = h('div.grid'), tally = h('span.hint');
   let alive = true, timer = null, last = null;
 
   async function act(id, action) {
-    try { await api(`/api/depot/${id}/${action}`, { method: 'POST' }); } catch (e) { toast(e.message, true); }
+    try { await api(`/api/depot/${id}/${action}`, { method: 'POST' }); } catch (error) { toast(error.message, true); }
     await load();
-  }
-
-  function card(s, docker, canAdmin) {
-    const running = s.container?.state === 'running';
-    const working = s.job?.state === 'working';
-    const status = working ? h('span.tag.acc', s.job.message)
-      : running ? h('span.tag.ok', 'RUNNING')
-      : s.container ? h('span.tag', s.container.state)
-      : h('span.tag', 'NOT DEPLOYED');
-    const url = `http://${location.hostname}:${s.port}`;
-    const off = !docker.online || !canAdmin || working;
-    return h('section.panel.s4.col', h('div.ph', h('span', s.title.toUpperCase()), status),
-      h('div.pb.svc',
-        h('h3', s.name), h('div.sub', `${s.category} // PORT ${s.port}${s.custom ? ' // CUSTOM' : ''}`),
-        h('p', s.desc),
-        s.note ? h('p', { style: 'font-size:12px' }, s.note) : null,
-        s.links.length ? h('div.links', h('span.hint', 'SOURCES'),
-          s.links.map((l) => h('a.tag', { href: l.url, target: '_blank', rel: 'noopener noreferrer', title: l.url }, l.label))) : null,
-        h('div.meta', s.image, s.dataDir ? h('div', `DATA  ${s.dataDir}`) : null),
-        s.job?.state === 'error' ? h('div.banner', h('b', 'FAULT'), s.job.message) : null,
-        h('div.row',
-          running
-            ? [h('a.btn.primary', { href: url, target: '_blank', rel: 'noopener', style: 'text-decoration:none' }, 'OPEN'),
-              h('button.btn', { disabled: off, onclick: () => act(s.id, 'stop') }, 'STOP')]
-            : h('button.btn.primary', { disabled: off, onclick: () => act(s.id, 'start') }, s.container ? 'START' : 'DEPLOY'),
-          s.container ? h('button.btn.danger', { disabled: off, title: 'Removes the container. Data on disk is kept.', onclick: () => { if (confirm(`Remove the ${s.name} container? Its data folder is kept.`)) act(s.id, 'remove'); } }, 'REMOVE') : null)));
   }
 
   function paint() {
@@ -43,15 +65,14 @@ export async function render(root) {
     if (!d) return;
     const cats = [...new Set(d.services.map((s) => s.category))];
     if (filter !== 'ALL' && filter !== 'ACTIVE' && !cats.includes(filter)) filter = 'ALL';
-    const active = d.services.filter((s) => s.container);
-    const count = (c) => (c === 'ALL' ? d.services.length : c === 'ACTIVE' ? active.length : d.services.filter((s) => s.category === c).length);
     tabs.replaceChildren(...['ALL', 'ACTIVE', ...cats].map((c) =>
-      h('button', { role: 'tab', class: c === filter ? 'active' : null, onclick: () => { filter = c; paint(); } }, `${c} ${count(c)}`)));
-    const shown = filter === 'ALL' ? d.services : filter === 'ACTIVE' ? active : d.services.filter((s) => s.category === filter);
-    grid.replaceChildren(...(shown.length ? shown.map((s) => card(s, d.docker, d.canAdmin))
+      h('button', { role: 'tab', class: c === filter ? 'active' : null, onclick: () => { filter = c; paint(); } }, `${c} ${servicesIn(d.services, c).length}`)));
+    const shown = servicesIn(d.services, filter);
+    grid.replaceChildren(...(shown.length ? shown.map((s) => card(s, d.docker, d.canAdmin, act))
       : [h('div.s12.empty', filter === 'ACTIVE' ? 'NOTHING DEPLOYED YET' : 'NO SERVICES')]));
+    const deployed = servicesIn(d.services, 'ACTIVE').length;
     const running = d.services.filter((s) => s.container?.state === 'running').length;
-    tally.textContent = `${d.services.length} AVAILABLE // ${active.length} DEPLOYED // ${running} RUNNING`;
+    tally.textContent = `${d.services.length} AVAILABLE // ${deployed} DEPLOYED // ${running} RUNNING`;
   }
 
   async function load() {
@@ -60,13 +81,10 @@ export async function render(root) {
       const d = await api('/api/depot');
       if (!alive) return;
       last = d;
-      banner.replaceChildren(...[
-        !d.docker.online ? h('div.banner', h('b', 'DOCKER OFFLINE'), 'The Docker engine is not running on this node. Start Docker to deploy services. Everything else in Shelter works without it.')
-        : !d.canAdmin ? h('div.banner', h('b', 'READ ONLY'), 'Services can only be deployed or stopped from the host machine itself.')
-        : null].filter(Boolean));
+      banner.replaceChildren(...[bannerFor(d)].filter(Boolean));
       paint();
-    } catch (e) {
-      banner.replaceChildren(h('div.banner', h('b', 'FAULT'), e.message));
+    } catch (error) {
+      banner.replaceChildren(h('div.banner', h('b', 'FAULT'), error.message));
     }
     clearTimeout(timer);
     timer = setTimeout(load, 4000);

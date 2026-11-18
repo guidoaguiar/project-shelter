@@ -23,7 +23,7 @@ A field manual, a local AI advisor, an offline map and field tools that run on h
 
 - **249-entry survival manual**, with 167 figures and ranked full-text search: water, fire, shelter, food, navigation, medical, signals and more.
 - **A local AI advisor that cites its sources.** It answers from the manual and links the entries it used. With no model installed, it still returns the closest entries.
-- **An offline world map** with waypoints, plus range and bearing from home.
+- **An offline street map.** While you have a link, download your area once: roads, footpaths, tracks, rivers, buildings, place names, and water points, clinics, fuel and shelters from OpenStreetMap. After that it works with no internet, with waypoints, a scale bar, and range and bearing from home.
 - **Field tools:** UTM and MGRS conversion, sun and moon times, Morse with audio, water disinfection dosing, pace counts.
 - **Supply tracking** that tells you how many days of food and water you have and warns before items expire.
 - **A one-click Depot** for 19 more offline services: Kiwix (offline Wikipedia), Kolibri, Calibre-Web, Open WebUI and others.
@@ -167,7 +167,7 @@ The Depot then uses the Docker CLI on the same machine, if there is one.
 | 01 | Command | Host telemetry, link status, grid position, sun and moon, supply readiness, configuration |
 | 02 | Manual | 249 entries in 14 sections, with figures and ranked full-text search. Each section opens with short essentials, followed by full chapters |
 | 03 | Advisor | Chat with a local model, grounded in the manual and citing entries. With no model it returns the closest entries instead |
-| 04 | Map | Offline vector world map, waypoints, range and bearing from home |
+| 04 | Map | World outline everywhere, plus downloadable street maps (roads, paths, tracks, water, buildings, key points) that work offline. Waypoints, range and bearing from home |
 | 05 | Tools | Coordinate conversion (DD, DMS, UTM, MGRS), sun and moon times, Morse with audio, water disinfection dosing, pace and bearing, encoding and hashing |
 | 06 | Log | Markdown notes saved on the node |
 | 07 | Stores | Supply inventory with days of water and food, and expiry warnings |
@@ -212,6 +212,29 @@ The file name sets the section (`11-vehicles.md` becomes VEHICLES). Each line st
 
 To file entries under an existing section, or as a chapter within it, start the file with `category: WATER` and, optionally, `group: Chapter Name`. Files may also sit in a subfolder, with figures in its `img/` folder referenced as `![Caption](img/name.png)`.
 
+## Offline street maps
+
+The Map module always shows a world outline. To get roads and paths, download your area while you have an internet link:
+
+1. Open **Map** on the host machine, then pan and zoom until your area fills the map.
+2. Under **Offline maps**, name the area, pick a detail level and choose **Download visible area**.
+
+| Detail | Shows | Typical size |
+|---|---|---|
+| Zoom 15 | Streets, footpaths, tracks, buildings, water points, clinics, shelters | Under 1 MB per km² in a dense town, far less in open country. All of Hungary is about 500 MB |
+| Zoom 13 to 14 | All roads and most tracks | About a fifth (13) to a half (14) of zoom 15 |
+| Zoom 10 to 12 | Main roads and towns for a whole region | All of Hungary at zoom 12 is about 76 MB |
+
+Each download is a single `.pmtiles` file in `<data>/maps`. One download is limited to 400,000 tiles: about 450 km × 450 km at zoom 15, or a large country such as France at zoom 12. Download several areas for more: a detailed one around home, and a lower-detail one for the wider region.
+
+You can also make a file yourself with the [pmtiles CLI](https://docs.protomaps.com/pmtiles/cli) and copy it into `<data>/maps`, for example a whole country cut from the Protomaps planet build. Find the newest build name at [maps.protomaps.com/builds](https://maps.protomaps.com/builds); builds are kept for about a week.
+
+```
+pmtiles extract https://build.protomaps.com/YYYYMMDD.pmtiles my-country.pmtiles --bbox=16.11,45.73,22.91,48.59
+```
+
+Shelter reads any vector PMTiles archive that uses the [Protomaps basemap layers](https://docs.protomaps.com/basemaps/layers).
+
 ## Adding your own services
 
 Create `config/depot.custom.json` (on an installed node, `app/config/depot.custom.json`) with entries in the same format as `config/depot.json`, then restart: `shelter restart`, or `docker compose restart` in the app folder. An entry whose `id` matches a built-in one replaces it.
@@ -250,8 +273,9 @@ With Docker, set these in `.env` next to `compose.yaml` (see [.env.example](.env
 | `SHELTER_REMOTE_ADMIN` | `0` | Set to `1` to allow Depot control from other devices in network mode |
 | `SHELTER_DEPOT_UID` | `1000` | Owner given to Depot service folders (`uid` or `uid:gid`, `off` to skip) |
 | `SHELTER_DEPOT_HOST_DIR` | unset | Docker Desktop on Windows: where the Docker VM sees `SHELTER_DATA_DIR/depot` |
+| `SHELTER_MAP_SOURCE` | newest Protomaps daily build | PMTiles URL that map downloads are cut from |
 
-Running from source, the server reads `PORT`, `HOST` (`127.0.0.1`, or `0.0.0.0` with `--lan`), `SHELTER_DATA` (`./data`), `SHELTER_NET_CHECK`, `SHELTER_REMOTE_ADMIN` and `SHELTER_AI_URL`.
+Running from source, the server reads `PORT`, `HOST` (`127.0.0.1`, or `0.0.0.0` with `--lan`), `SHELTER_DATA` (`./data`), `SHELTER_NET_CHECK`, `SHELTER_REMOTE_ADMIN`, `SHELTER_AI_URL` and `SHELTER_MAP_SOURCE`.
 
 Back up the node by copying the data folder.
 
@@ -259,11 +283,12 @@ Back up the node by copying the data folder.
 
 ```
 server.js            HTTP server and API
-server/              manual search, storage, telemetry, model link, depot
+server/              manual search, storage, telemetry, model link, depot, street maps
 content/manual/      field manual (Markdown)
 config/depot.json    container catalog
 public/              interface: no build step, no external assets
 install/             one-line installers (install.sh: Linux, macOS; install.ps1: Windows)
+test/                tests (node --test), not shipped
 Dockerfile           image: Node + Docker CLI
 compose*.yaml        Docker Compose stack and per-platform network overrides
 data/                created at first run (from source)
@@ -271,13 +296,15 @@ data/                created at first run (from source)
 
 ## Notes
 
-- The only outbound traffic is the uplink probe (a bare TCP connection) and whatever you deploy or download yourself.
-- Map data is Natural Earth 1:110m (public domain), via the `world-atlas` package. It is for orientation, not route planning.
+- The only outbound traffic is the uplink probe (a bare TCP connection) and whatever you deploy or download yourself, including street maps.
+- The world outline is Natural Earth 1:110m (public domain), via the `world-atlas` package. Street maps are © OpenStreetMap contributors (ODbL), served as vector tiles from the [Protomaps](https://protomaps.com) daily build. OpenStreetMap coverage varies: check trails against the ground.
 - The manual is a reference, not training, and not a substitute for professional medical care. Practise skills before you depend on them.
 
 ## Contributing
 
 New manual entries, corrections, Depot services and bug reports are all welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Code changes go through CI: lint with the SonarQube rules and the test suite (`npm run check` runs both locally). Pull requests cannot be merged until both pass.
 
 ## Support
 

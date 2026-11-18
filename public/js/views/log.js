@@ -4,6 +4,10 @@ import { md } from '../lib/md.js';
 
 let selected = null;
 
+const pad2 = (n) => String(n).padStart(2, '0');
+/** Date and local time of an ISO timestamp: YYYY-MM-DD HH:MM. */
+const when = (iso) => { const d = new Date(iso); return `${d.toISOString().slice(0, 10)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+
 export async function render(root) {
   let notes = await api('/api/db/notes');
   const list = h('div.list.list-scroll');
@@ -11,7 +15,6 @@ export async function render(root) {
   let timer = null, dirty = false, current = null, titleEl, bodyEl, stamp;
 
   const sorted = () => [...notes].sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
-  const when = (iso) => { const d = new Date(iso); return `${d.toISOString().slice(0, 10)} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 
   function paintList() {
     list.replaceChildren(...(notes.length ? sorted().map((n) => h('button.item', { class: n.id === selected ? 'active' : null, onclick: () => open(n.id) },
@@ -28,7 +31,7 @@ export async function render(root) {
       notes = notes.map((n) => (n.id === id ? savedNote : n));
       if (current?.id === id) { current = savedNote; stamp.textContent = `SAVED ${when(savedNote.updated)}`; }
       paintList();
-    } catch (e) { dirty = true; toast(e.message, true); }
+    } catch (error) { dirty = true; toast(error.message, true); }
   }
   const touch = () => { dirty = true; stamp.textContent = 'UNSAVED'; clearTimeout(timer); timer = setTimeout(save, 900); };
 
@@ -60,7 +63,7 @@ export async function render(root) {
           h('button.btn.danger', { onclick: async () => {
             if (!confirm(`Delete "${doomed.title || 'UNTITLED'}"? This cannot be undone.`)) return;
             clearTimeout(timer); dirty = false;
-            try { await api(`/api/db/notes/${doomed.id}`, { method: 'DELETE' }); notes = notes.filter((n) => n.id !== doomed.id); open(null); } catch (e) { toast(e.message, true); }
+            try { await api(`/api/db/notes/${doomed.id}`, { method: 'DELETE' }); notes = notes.filter((n) => n.id !== doomed.id); await open(null); } catch (error) { toast(error.message, true); }
           } }, 'DELETE')))));
   }
 
@@ -71,15 +74,19 @@ export async function render(root) {
       notes = [...notes, n];
       await open(n.id);
       bodyEl?.focus();
-    } catch (e) { toast(e.message, true); }
+    } catch (error) { toast(error.message, true); }
   }
 
-  const onKey = (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(); } };
+  const onKey = (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 's') return;
+    e.preventDefault();
+    return save();
+  };
   window.addEventListener('keydown', onKey);
 
   root.append(
     viewHeader('06', 'LOG', 'Field notes, plans and records. Saved automatically to this node.', h('button.btn.primary', { onclick: create }, 'NEW ENTRY')),
     h('div.split', h('div.sticky', panel('ENTRIES', 'LOG', list)), editor));
   await open(notes.some((n) => n.id === selected) ? selected : sorted()[0]?.id ?? null);
-  return () => { window.removeEventListener('keydown', onKey); save(); };
+  return () => { window.removeEventListener('keydown', onKey); return save(); };
 }

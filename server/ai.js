@@ -16,8 +16,8 @@ export async function aiStatus(ai) {
     const data = await r.json();
     const models = ai.provider === 'openai' ? (data.data || []).map((m) => m.id) : (data.models || []).map((m) => m.name);
     value = { online: true, models };
-  } catch (e) {
-    value = { online: false, models: [], error: e.cause?.code || e.message };
+  } catch (error) {
+    value = { online: false, models: [], error: error.cause?.code || error.message };
   }
   cache.set(key, { at: Date.now(), value });
   return value;
@@ -44,22 +44,30 @@ export async function streamChat(ai, model, messages, onDelta, signal) {
     signal,
   });
   if (!r.ok) throw new Error(`model server returned HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const parse = openai ? openaiEvent : ollamaEvent;
   for await (const line of lines(r.body)) {
-    if (openai) {
-      if (!line.startsWith('data:')) continue;
-      const payload = line.slice(5).trim();
-      if (payload === '[DONE]') break;
-      let obj;
-      try { obj = JSON.parse(payload); } catch { continue; }
-      const text = obj.choices?.[0]?.delta?.content;
-      if (text) onDelta(text);
-    } else {
-      let obj;
-      try { obj = JSON.parse(line); } catch { continue; }
-      if (obj.error) throw new Error(obj.error);
-      if (obj.message?.content) onDelta(obj.message.content);
-    }
+    const ev = parse(line);
+    if (ev?.done) break;
+    if (ev?.text) onDelta(ev.text);
   }
+}
+
+const parseJson = (s) => { try { return JSON.parse(s); } catch { return null; } };
+
+/** One server-sent-events line of an OpenAI-style stream: { text }, { done } or null to skip. */
+function openaiEvent(line) {
+  if (!line.startsWith('data:')) return null;
+  const payload = line.slice(5).trim();
+  if (payload === '[DONE]') return { done: true };
+  const obj = parseJson(payload);
+  return obj && { text: obj.choices?.[0]?.delta?.content };
+}
+
+/** One NDJSON line of an Ollama stream: { text } or null to skip. Throws the server's error. */
+function ollamaEvent(line) {
+  const obj = parseJson(line);
+  if (obj?.error) throw new Error(obj.error);
+  return obj && { text: obj.message?.content };
 }
 
 export function buildPrompt(passages) {

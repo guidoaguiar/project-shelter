@@ -4,6 +4,42 @@ import { md } from '../lib/md.js';
 
 let lastQuery = '';
 
+/** category -> (chapter -> entries). Entries without a chapter are the section's quick-reference essentials. */
+function sectionsOf(index) {
+  const sections = new Map();
+  for (const a of index) {
+    if (!sections.has(a.category)) sections.set(a.category, new Map());
+    const groups = sections.get(a.category);
+    const key = a.group || '';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(a);
+  }
+  return sections;
+}
+
+const entryCount = (groups) => [...groups.values()].reduce((n, g) => n + g.length, 0);
+
+/** The manual's landing page: counts, one card per section, and how to add entries. */
+function overview(index, sections) {
+  const chapters = new Set(index.map((a) => a.group).filter(Boolean)).size;
+  return [
+    h('div.prose',
+      h('h2', { style: 'margin-top:0' }, 'Field manual'),
+      h('p', `${index.length} entries in ${sections.size} sections and ${chapters} chapters. Everything here is stored on this node and readable with no outside link.`),
+      h('p', 'Each section opens with short essentials for quick reference, followed by full chapters with figures. Select an entry from the index, or search. Skills are learned by doing: practise them before you need them.')),
+    h('div.grid', { style: 'margin:16px 0' }, [...sections].map(([cat, groups]) => {
+      const first = [...groups.values()][0][0];
+      return h('a.colcard.s4', { href: `#/manual/${first.id}` },
+        h('div.name', cat),
+        h('div.lbl', `${entryCount(groups)} ENTRIES`),
+        h('div.desc', [...groups.keys()].filter(Boolean).join(' · ') || 'Essentials'));
+    })),
+    h('div.prose',
+      h('h2', 'Adding your own'),
+      h('p', 'Drop a Markdown file into content/manual. The file name sets the section, each line starting with a single # starts a new entry, and an optional "tags:" line beneath it improves search. New files appear without a restart.')),
+  ];
+}
+
 export async function render(root, arg) {
   const index = await api('/api/manual');
   let currentId = '';
@@ -18,20 +54,11 @@ export async function render(root, arg) {
   const link = (a, sub, tag) => h('a', { href: `#/manual/${a.id}`, class: a.id === currentId ? 'active' : null },
     h('div.t1', a.title), tag ? h('div.t3', tag) : null, sub ? h('div.t2', sub) : null);
 
-  // Sections hold chapters; entries without a chapter are the section's quick-reference essentials.
-  const sections = new Map();
-  for (const a of index) {
-    if (!sections.has(a.category)) sections.set(a.category, new Map());
-    const groups = sections.get(a.category);
-    const key = a.group || '';
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(a);
-  }
-  const chapters = new Set(index.map((a) => a.group).filter(Boolean)).size;
+  const sections = sectionsOf(index);
 
   function showIndex() {
     const kids = [...sections].map(([cat, groups]) => {
-      const total = [...groups.values()].reduce((n, g) => n + g.length, 0);
+      const total = entryCount(groups);
       const here = article?.category === cat;
       const body = [...groups].map(([name, items]) => {
         if (groups.size === 1) return items.map((a) => link(a));
@@ -69,21 +96,7 @@ export async function render(root, arg) {
   } else if (currentId) {
     reader.replaceChildren(h('div.empty', 'ENTRY NOT FOUND'));
   } else {
-    reader.replaceChildren(
-      h('div.prose',
-        h('h2', { style: 'margin-top:0' }, 'Field manual'),
-        h('p', `${index.length} entries in ${sections.size} sections and ${chapters} chapters. Everything here is stored on this node and readable with no outside link.`),
-        h('p', 'Each section opens with short essentials for quick reference, followed by full chapters with figures. Select an entry from the index, or search. Skills are learned by doing: practise them before you need them.')),
-      h('div.grid', { style: 'margin:16px 0' }, [...sections].map(([cat, groups]) => {
-        const first = [...groups.values()][0][0];
-        return h('a.colcard.s4', { href: `#/manual/${first.id}` },
-          h('div.name', cat),
-          h('div.lbl', `${[...groups.values()].reduce((n, g) => n + g.length, 0)} ENTRIES`),
-          h('div.desc', [...groups.keys()].filter(Boolean).join(' · ') || 'Essentials'));
-      })),
-      h('div.prose',
-        h('h2', 'Adding your own'),
-        h('p', 'Drop a Markdown file into content/manual. The file name sets the section, each line starting with a single # starts a new entry, and an optional "tags:" line beneath it improves search. New files appear without a restart.')));
+    reader.replaceChildren(...overview(index, sections));
   }
 
   root.append(
@@ -92,6 +105,6 @@ export async function render(root, arg) {
       h('div.sticky', panel('INDEX', `${index.length} ENTRIES`, h('div', h('div.pb', search), list))),
       panel(article ? 'ENTRY' : 'OVERVIEW', 'MAN', reader)));
 
-  if (lastQuery) runSearch(); else showIndex();
+  if (lastQuery) await runSearch(); else showIndex();
   return () => clearTimeout(timer);
 }

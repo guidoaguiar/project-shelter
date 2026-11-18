@@ -1,5 +1,5 @@
 // 03 ADVISOR — local-model chat grounded in the field manual. Falls back to manual lookup with no model.
-import { h, state, onStatus, viewHeader, panel, toast } from '../lib/core.js';
+import { h, state, onStatus, viewHeader, toast } from '../lib/core.js';
 import { md } from '../lib/md.js';
 
 const history = []; // { role, content, sources?, note? } — kept while the tab stays open
@@ -12,7 +12,30 @@ const STARTERS = [
   'How do I keep food without a fridge?',
 ];
 
-export async function render(root) {
+/** Calls onLine for each non-blank line of a streamed body, as the bytes arrive. */
+async function readLines(reader, onLine, dec = new TextDecoder(), buf = '') {
+  const { value, done } = await reader.read();
+  if (done) return;
+  const lines = (buf + dec.decode(value, { stream: true })).split('\n');
+  const rest = lines.pop(); // incomplete last line: wait for more bytes
+  for (const line of lines) if (line.trim()) onLine(line);
+  await readLines(reader, onLine, dec, rest);
+}
+
+/** Updates the reply being built from one server event (see /api/chat). */
+function applyEvent(reply, ev) {
+  if (ev.type === 'sources') reply.sources = ev.items;
+  else if (ev.type === 'delta') reply.content += ev.text;
+  else if (ev.type === 'error') reply.content += `\n\n> **FAULT** ${ev.message}`;
+  else if (ev.type === 'offline') {
+    reply.note = `NO MODEL LINK (${ev.reason}). Showing the closest field manual entries.`;
+    reply.content = reply.sources.length
+      ? reply.sources.map((s) => `**${s.title}** — ${s.summary}`).join('\n\n')
+      : 'Nothing in the field manual matches that question. Try different words, or browse the Manual module.';
+  }
+}
+
+export function render(root) {
   const log = h('div.chat-log');
   const input = h('textarea', { placeholder: 'Ask a question. Enter to send, Shift+Enter for a new line.', 'aria-label': 'Question' });
   const send = h('button.btn.primary', 'SEND');
@@ -65,32 +88,9 @@ export async function render(root) {
         body: JSON.stringify({ messages: history.slice(0, -1).map(({ role, content }) => ({ role, content })) }),
       });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
-      const reader = r.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '';
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let i;
-        while ((i = buf.indexOf('\n')) >= 0) {
-          const line = buf.slice(0, i); buf = buf.slice(i + 1);
-          if (!line.trim()) continue;
-          const ev = JSON.parse(line);
-          if (ev.type === 'sources') reply.sources = ev.items;
-          else if (ev.type === 'delta') reply.content += ev.text;
-          else if (ev.type === 'error') reply.content += `\n\n> **FAULT** ${ev.message}`;
-          else if (ev.type === 'offline') {
-            reply.note = `NO MODEL LINK (${ev.reason}). Showing the closest field manual entries.`;
-            reply.content = reply.sources.length
-              ? reply.sources.map((s) => `**${s.title}** — ${s.summary}`).join('\n\n')
-              : 'Nothing in the field manual matches that question. Try different words, or browse the Manual module.';
-          }
-          paint();
-        }
-      }
-    } catch (e) {
-      if (e.name !== 'AbortError') { reply.content += `\n\n> **FAULT** ${e.message}`; toast(e.message, true); }
+      await readLines(r.body.getReader(), (line) => { applyEvent(reply, JSON.parse(line)); paint(); });
+    } catch (error) {
+      if (error.name !== 'AbortError') { reply.content += `\n\n> **FAULT** ${error.message}`; toast(error.message, true); }
     }
     busy = null;
     send.textContent = 'SEND';
@@ -98,7 +98,11 @@ export async function render(root) {
   }
 
   send.addEventListener('click', () => (busy ? busy.abort() : ask()));
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); } });
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    e.preventDefault();
+    return ask();
+  });
 
   root.append(
     viewHeader('03', 'ADVISOR', 'Ask in plain language. Runs on a local model; nothing leaves this node.',

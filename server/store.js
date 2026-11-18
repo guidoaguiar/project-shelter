@@ -52,7 +52,7 @@ export class Settings {
   constructor(file) {
     this.file = file;
     const saved = readJson(file, {});
-    this.value = { ...DEFAULTS, ...saved, ai: { ...DEFAULTS.ai, ...(saved.ai || {}) } };
+    this.value = { ...DEFAULTS, ...saved, ai: { ...DEFAULTS.ai, ...saved.ai } };
   }
   /** Settings as sent to browsers: the API key never leaves the server. */
   public() {
@@ -61,19 +61,32 @@ export class Settings {
   }
   update(input) {
     const v = this.value;
-    const num = (x, lo, hi) => (x === null || x === '' || x === undefined || !Number.isFinite(+x) ? null : Math.min(hi, Math.max(lo, +x)));
     if ('callsign' in input) v.callsign = String(input.callsign || '').slice(0, 24).toUpperCase() || DEFAULTS.callsign;
-    if ('lat' in input) v.lat = num(input.lat, -90, 90);
-    if ('lon' in input) v.lon = num(input.lon, -180, 180);
-    if ('people' in input) v.people = Math.round(num(input.people, 1, 999) || 1);
-    if (input.ai && typeof input.ai === 'object') {
-      const a = input.ai;
-      if ('provider' in a) v.ai.provider = a.provider === 'openai' ? 'openai' : 'ollama';
-      if ('baseUrl' in a && /^https?:\/\//i.test(String(a.baseUrl))) v.ai.baseUrl = String(a.baseUrl).replace(/\/+$/, '').slice(0, 300);
-      if ('model' in a) v.ai.model = String(a.model || '').slice(0, 120);
-      if (typeof a.apiKey === 'string') v.ai.apiKey = a.apiKey.slice(0, 400);
-    }
+    if ('lat' in input) v.lat = clampOrNull(input.lat, -90, 90);
+    if ('lon' in input) v.lon = clampOrNull(input.lon, -180, 180);
+    if ('people' in input) v.people = Math.round(clampOrNull(input.people, 1, 999) || 1);
+    if (input.ai && typeof input.ai === 'object') updateAi(v.ai, input.ai);
     writeJson(this.file, v);
     return this.public();
   }
+}
+
+/** x as a number limited to lo..hi, or null when it is empty or not a number. */
+function clampOrNull(x, lo, hi) {
+  if (x === null || x === '' || x === undefined || !Number.isFinite(+x)) return null;
+  return Math.min(hi, Math.max(lo, +x));
+}
+
+/** s without trailing slashes. A loop, not /\/+$/, which is quadratic on a long run of slashes. */
+function stripTrailingSlashes(s) {
+  let end = s.length;
+  while (end > 0 && s[end - 1] === '/') end--;
+  return s.slice(0, end);
+}
+
+function updateAi(ai, a) {
+  if ('provider' in a) ai.provider = a.provider === 'openai' ? 'openai' : 'ollama';
+  if ('baseUrl' in a && /^https?:\/\//i.test(String(a.baseUrl))) ai.baseUrl = stripTrailingSlashes(String(a.baseUrl)).slice(0, 300);
+  if ('model' in a) ai.model = String(a.model || '').slice(0, 120);
+  if (typeof a.apiKey === 'string') ai.apiKey = a.apiKey.slice(0, 400);
 }

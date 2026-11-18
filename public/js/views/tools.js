@@ -3,8 +3,15 @@ import { h, api, home, viewHeader, panel, kv, field, hhmm, toast } from '../lib/
 import { parseCoord, toDMS, toMGRS, formatUTM, rangeBearing, compassPoint, sunTimes, moonPhase } from '../lib/geo.js';
 
 let active = 'coord';
-const num = (el) => { const v = parseFloat(el.value); return Number.isFinite(v) ? v : null; };
-const live = (els, fn) => { for (const el of els) el.addEventListener('input', fn); fn(); };
+const num = (el) => { const v = Number.parseFloat(el.value); return Number.isFinite(v) ? v : null; };
+const live = (els, fn) => {
+  for (const el of els) el.addEventListener('input', fn);
+  fn();
+};
+const norm = (d) => ((d % 360) + 360) % 360;
+const hoursMinutes = (x) => `${Math.floor(x)}H ${String(Math.round((x % 1) * 60)).padStart(2, '0')}M`;
+/** Morse words: split at "/" or "|" (spaces around them ignored), or at a gap of two or more spaces. */
+const morseWords = (code) => code.split(/[/|]/).flatMap((part) => part.trim().split(/\s{2,}/));
 
 // ---------- coordinates ----------
 function coord() {
@@ -68,6 +75,9 @@ const MORSE = { A: '.-', B: '-...', C: '-.-.', D: '-..', E: '.', F: '..-.', G: '
   '.': '.-.-.-', ',': '--..--', '?': '..--..', '/': '-..-.', '-': '-....-', '=': '-...-', '@': '.--.-.' };
 const UNMORSE = Object.fromEntries(Object.entries(MORSE).map(([k, v]) => [v, k]));
 let audio = null;
+const stopAudio = () => {
+  if (audio) { audio.close(); audio = null; }
+};
 
 function morse() {
   const text = h('textarea', { rows: 3, placeholder: 'TYPE TEXT, OR DOTS AND DASHES TO DECODE' }, 'SOS');
@@ -78,14 +88,14 @@ function morse() {
   live([text], () => {
     const v = text.value.trim();
     if (/^[.\-_/|\s]+$/.test(v) && /[.\-_]/.test(v)) {
-      code = v.replace(/_/g, '-');
-      out.textContent = code.split(/\s*[/|]\s*|\s{2,}/).map((w) => w.trim().split(/\s+/).map((c) => UNMORSE[c] || '?').join('')).join(' ');
+      code = v.replaceAll('_', '-');
+      out.textContent = morseWords(code).map((w) => w.trim().split(/\s+/).map((c) => UNMORSE[c] || '?').join('')).join(' ');
     } else {
       code = v.toUpperCase().split(/\s+/).map((w) => [...w].map((c) => MORSE[c] || '').filter(Boolean).join(' ')).filter(Boolean).join(' / ');
       out.textContent = code;
     }
   });
-  const stop = () => { if (audio) { audio.close(); audio = null; } playBtn.textContent = 'PLAY'; };
+  const stop = () => { stopAudio(); playBtn.textContent = 'PLAY'; };
   playBtn.addEventListener('click', () => {
     if (audio) return stop();
     if (!code) return;
@@ -156,7 +166,6 @@ function pace() {
   const brgOut = h('div');
   const km = h('input', { type: 'number', min: 0, step: 'any', value: 10 }), climb = h('input', { type: 'number', min: 0, value: 300 });
   const time = h('div');
-  const norm = (d) => ((d % 360) + 360) % 360;
   live([per, count], () => {
     const m = ((num(count) || 0) / (num(per) || 65)) * 100;
     dist.replaceChildren(kv('DISTANCE', `${m.toFixed(0)} M / ${(m / 1000).toFixed(2)} KM`));
@@ -168,8 +177,7 @@ function pace() {
   });
   live([km, climb], () => {
     const hours = (num(km) || 0) / 5 + (num(climb) || 0) / 600;
-    const fmt = (x) => `${Math.floor(x)}H ${String(Math.round((x % 1) * 60)).padStart(2, '0')}M`;
-    time.replaceChildren(kv('NAISMITH ESTIMATE', fmt(hours)), kv('LOADED OR ROUGH GROUND', `${fmt(hours * 1.25)} – ${fmt(hours * 1.5)}`));
+    time.replaceChildren(kv('NAISMITH ESTIMATE', hoursMinutes(hours)), kv('LOADED OR ROUGH GROUND', `${hoursMinutes(hours * 1.25)} – ${hoursMinutes(hours * 1.5)}`));
   });
   return h('div.grid',
     panel('PACE COUNT', 'NAV-01', h('div.pb', h('div.fr', field('PACES PER 100 M', per), field('PACES COUNTED', count)), dist,
@@ -180,29 +188,43 @@ function pace() {
 }
 
 // ---------- codec ----------
+const utf8 = new TextEncoder(), strictUtf8 = new TextDecoder('utf-8', { fatal: true });
+/** Shifts letters n places through the alphabet, keeping case. */
+const rot = (s, n) => s.replaceAll(/[a-z]/gi, (c) => {
+  const base = c <= 'Z' ? 65 : 97;
+  return String.fromCodePoint(((c.codePointAt(0) - base + n + 26) % 26) + base);
+});
+function hexDecode(s) {
+  const hex = s.replaceAll(/[^0-9a-f]/gi, '');
+  if (hex.length % 2) throw new Error('odd length');
+  return strictUtf8.decode(Uint8Array.from(hex.match(/../g) || [], (x) => Number.parseInt(x, 16)));
+}
+// Local operations: (text, caesar shift) -> result. Hashes are computed by the node.
+const CODEC = {
+  b64e: (s) => btoa(Array.from(utf8.encode(s), (b) => String.fromCodePoint(b)).join('')),
+  b64d: (s) => strictUtf8.decode(Uint8Array.from(atob(s.replaceAll(/\s+/g, '')), (c) => c.codePointAt(0))),
+  hexe: (s) => Array.from(utf8.encode(s), (b) => b.toString(16).padStart(2, '0')).join(' '),
+  hexd: hexDecode,
+  rot13: (s) => rot(s, 13),
+  caesar: (s, shift) => rot(s, ((Math.round(shift) % 26) + 26) % 26),
+};
+
 function codec() {
   const input = h('textarea', { rows: 5, placeholder: 'INPUT' });
   const op = h('select', ...[['b64e', 'BASE64 ENCODE'], ['b64d', 'BASE64 DECODE'], ['hexe', 'HEX ENCODE'], ['hexd', 'HEX DECODE'],
     ['rot13', 'ROT13'], ['caesar', 'CAESAR SHIFT'], ['sha256', 'SHA-256'], ['sha1', 'SHA-1'], ['md5', 'MD5']].map(([v, l]) => h('option', { value: v }, l)));
   const shift = h('input', { type: 'number', value: 3, min: -25, max: 25 });
   const out = h('div.out');
-  const enc = new TextEncoder(), dec = new TextDecoder('utf-8', { fatal: true });
-  const rot = (s, n) => s.replace(/[a-z]/gi, (c) => { const b = c <= 'Z' ? 65 : 97; return String.fromCharCode(((c.charCodeAt(0) - b + n + 26) % 26) + b); });
+  const compute = async (s) => {
+    const local = CODEC[op.value];
+    if (local) return local(s, num(shift) || 0);
+    return s ? (await api('/api/hash', { method: 'POST', body: { text: s, algo: op.value } })).hash : '';
+  };
   let seq = 0;
   async function run() {
     const s = input.value, mine = ++seq;
-    let r = '';
-    try {
-      switch (op.value) {
-        case 'b64e': { let bin = ''; for (const b of enc.encode(s)) bin += String.fromCharCode(b); r = btoa(bin); break; }
-        case 'b64d': r = dec.decode(Uint8Array.from(atob(s.replace(/\s+/g, '')), (c) => c.charCodeAt(0))); break;
-        case 'hexe': r = [...enc.encode(s)].map((b) => b.toString(16).padStart(2, '0')).join(' '); break;
-        case 'hexd': { const hex = s.replace(/[^0-9a-f]/gi, ''); if (hex.length % 2) throw new Error('odd length'); r = dec.decode(Uint8Array.from(hex.match(/../g) || [], (x) => parseInt(x, 16))); break; }
-        case 'rot13': r = rot(s, 13); break;
-        case 'caesar': r = rot(s, ((Math.round(num(shift) || 0) % 26) + 26) % 26); break;
-        default: r = s ? (await api('/api/hash', { method: 'POST', body: { text: s, algo: op.value } })).hash : '';
-      }
-    } catch { r = 'INPUT IS NOT VALID FOR THIS OPERATION'; }
+    let r;
+    try { r = await compute(s); } catch { r = 'INPUT IS NOT VALID FOR THIS OPERATION'; }
     if (mine === seq) out.textContent = r;
   }
   for (const el of [input, op, shift]) el.addEventListener('input', run);
@@ -215,16 +237,16 @@ function codec() {
 
 const TOOLS = [['coord', 'COORDINATES', coord], ['sun', 'SUN / MOON', sun], ['morse', 'MORSE', morse], ['water', 'WATER', water], ['pace', 'PACE / BEARING', pace], ['codec', 'CODEC', codec]];
 
-export async function render(root, arg) {
+export function render(root, arg) {
   if (TOOLS.some(([id]) => id === arg)) active = arg;
   const body = h('div');
   const tabs = h('div.tabs', { role: 'tablist' });
   function show() {
-    if (audio) { audio.close(); audio = null; }
+    stopAudio();
     tabs.replaceChildren(...TOOLS.map(([id, label]) => h('button', { role: 'tab', class: id === active ? 'active' : null, onclick: () => { active = id; show(); } }, label)));
     body.replaceChildren(TOOLS.find(([id]) => id === active)[2]());
   }
   root.append(viewHeader('05', 'TOOLS', 'Calculators for navigation, signalling and water. All computed on this device.'), tabs, body);
   show();
-  return () => { if (audio) { audio.close(); audio = null; } };
+  return stopAudio;
 }

@@ -5,11 +5,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
-function run(args, timeout = 8000) {
+/** Runs the Docker CLI with an argv array (no shell). Resolves { code, out, err }; never rejects. */
+export function runDocker(args, timeout = 8000) {
   return new Promise((resolve) => {
     let out = '', err = '';
     let child;
-    try { child = spawn('docker', args, { windowsHide: true }); } catch (e) { return resolve({ code: -1, out, err: e.message }); }
+    // The Docker CLI is found through PATH on purpose: its install location differs between Linux
+    // packages, Docker Desktop and the Shelter container image.
+    // eslint-disable-next-line sonarjs/no-os-command-from-path -- see above
+    try { child = spawn('docker', args, { windowsHide: true }); } catch (error) { return resolve({ code: -1, out, err: error.message }); }
     const timer = setTimeout(() => child.kill(), timeout);
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { err += d; });
@@ -19,9 +23,11 @@ function run(args, timeout = 8000) {
 }
 
 /** Joins path segments in the host's style, which may differ from this process's (a Windows host behind a Linux container). */
-function joinHost(root, ...parts) {
+export function joinHost(root, ...parts) {
   const sep = root.includes('\\') && !root.includes('/') ? '\\' : '/';
-  return [root.replace(/[\\/]+$/, ''), ...parts].join(sep);
+  let end = root.length;
+  while (end > 0 && (root[end - 1] === '/' || root[end - 1] === '\\')) end--; // trailing separators
+  return [root.slice(0, end), ...parts].join(sep);
 }
 
 /** Keeps only well-formed catalog entries; ids become container names and URL segments. */
@@ -29,7 +35,7 @@ function validate(entries, source) {
   const out = [];
   for (const e of Array.isArray(entries) ? entries : []) {
     const ok = e && /^[a-z0-9][a-z0-9-]{0,40}$/.test(e.id || '') && typeof e.image === 'string' && /^[A-Za-z0-9_.\-/:@]+$/.test(e.image)
-      && Number.isInteger(e.port) && e.port > 0 && e.port < 65536 && Number.isInteger(e.containerPort);
+      && Number.isInteger(e.port) && e.port > 0 && e.port < 65_536 && Number.isInteger(e.containerPort);
     if (ok) out.push({ ...e, name: String(e.name || e.id).toUpperCase(), title: String(e.title || 'Service'), desc: String(e.desc || ''), category: String(e.category || 'OTHER').toUpperCase() });
     else console.warn(`depot: skipped invalid entry in ${source}: ${JSON.stringify(e?.id ?? e)}`);
   }
@@ -41,7 +47,8 @@ export class Depot {
    * hostDataDir: the data folder as the Docker host sees it, when Shelter itself runs in a container.
    * bindRoot: overrides where Docker finds depot folders (Docker Desktop on Windows needs /run/desktop/mnt/host/...).
    */
-  constructor(catalogFile, dataDir, bindHost, { hostDataDir = '', bindRoot = '' } = {}) {
+  constructor(catalogFile, dataDir, bindHost, { hostDataDir = '', bindRoot = '', run = runDocker } = {}) {
+    this.run = run; // replaceable in tests
     this.catalog = validate(JSON.parse(fs.readFileSync(catalogFile, 'utf8')), path.basename(catalogFile));
     // Optional user additions: config/depot.custom.json, same format. Entries with a matching id replace the built-in one.
     const customFile = path.join(path.dirname(catalogFile), 'depot.custom.json');
@@ -52,7 +59,7 @@ export class Depot {
           const entry = { ...e, custom: true };
           if (i >= 0) this.catalog[i] = entry; else this.catalog.push(entry);
         }
-      } catch (err) { console.warn(`depot: could not read depot.custom.json: ${err.message}`); }
+      } catch (error) { console.warn(`depot: could not read depot.custom.json: ${error.message}`); }
     }
     this.dataDir = dataDir;
     this.hostDataDir = hostDataDir;
@@ -63,8 +70,8 @@ export class Depot {
   }
 
   async docker() {
-    if (Date.now() - this.dockerCache.at < 10000) return this.dockerCache.value;
-    const r = await run(['version', '--format', '{{.Server.Version}}'], 5000);
+    if (Date.now() - this.dockerCache.at < 10_000) return this.dockerCache.value;
+    const r = await this.run(['version', '--format', '{{.Server.Version}}'], 5000);
     const value = r.code === 0 && r.out ? { online: true, version: r.out } : { online: false, version: null };
     this.dockerCache = { at: Date.now(), value };
     return value;
@@ -118,7 +125,7 @@ export class Depot {
     const docker = await this.docker();
     const states = new Map();
     if (docker.online) {
-      const r = await run(['ps', '-a', '--filter', 'label=shelter.service', '--format', '{{.Label "shelter.service"}}\t{{.State}}\t{{.Status}}']);
+      const r = await this.run(['ps', '-a', '--filter', 'label=shelter.service', '--format', '{{.Label "shelter.service"}}\t{{.State}}\t{{.Status}}']);
       for (const line of r.out.split('\n')) {
         const [id, state, status] = line.split('\t');
         if (id) states.set(id, { state, status });
@@ -142,43 +149,47 @@ export class Depot {
     if (!svc) throw Object.assign(new Error('unknown service'), { status: 404 });
     if (!(await this.docker()).online) throw Object.assign(new Error('Docker is not running on this host'), { status: 409 });
     if (this.jobs.get(id)?.state === 'working') throw Object.assign(new Error('operation already in progress'), { status: 409 });
-    const name = `shelter-${svc.id}`;
-
-    if (action === 'stop' || action === 'remove') {
-      const r = await run(action === 'stop' ? ['stop', name] : ['rm', '-f', name], 30000);
-      if (r.code !== 0) throw Object.assign(new Error(r.err || 'docker command failed'), { status: 500 });
-      this.jobs.delete(id);
-      return { ok: true };
-    }
+    if (action === 'stop' || action === 'remove') return this.#stop(svc, action);
     if (action !== 'start') throw Object.assign(new Error('unknown action'), { status: 400 });
+    return this.#start(svc);
+  }
 
+  async #stop(svc, action) {
+    const name = `shelter-${svc.id}`;
+    const r = await this.run(action === 'stop' ? ['stop', name] : ['rm', '-f', name], 30_000);
+    if (r.code !== 0) throw Object.assign(new Error(r.err || 'docker command failed'), { status: 500 });
+    this.jobs.delete(svc.id);
+    return { ok: true };
+  }
+
+  async #start(svc) {
+    const name = `shelter-${svc.id}`;
     const mounts = this.mounts(svc);
     for (const [dir] of mounts) fs.mkdirSync(dir, { recursive: true });
     this.ownFolders(svc, mounts);
-    if (mounts.length) {
-      if (svc.needsFiles && !fs.readdirSync(this.volumeDir(svc)).some((f) => f.toLowerCase().endsWith(svc.needsFiles))) {
-        throw Object.assign(new Error(`no ${svc.needsFiles} files in ${this.displayDir(svc)} — add content first`), { status: 409 });
-      }
+    if (mounts.length && svc.needsFiles && !fs.readdirSync(this.volumeDir(svc)).some((f) => f.toLowerCase().endsWith(svc.needsFiles))) {
+      throw Object.assign(new Error(`no ${svc.needsFiles} files in ${this.displayDir(svc)} — add content first`), { status: 409 });
     }
-    const exists = (await run(['inspect', '--format', '{{.State.Status}}', name])).code === 0;
-    let args;
-    if (exists) {
-      args = ['start', name];
-    } else {
-      args = ['run', '-d', '--name', name, '--label', `shelter.service=${svc.id}`, '--restart', 'unless-stopped',
-        '-p', `${this.bindHost}:${svc.port}:${svc.containerPort}`];
-      // --mount rather than -v: a Windows host path contains a colon.
-      for (const [, source, target] of mounts) args.push('--mount', `type=bind,source=${source},target=${target}`);
-      for (const h of svc.extraHosts || []) args.push('--add-host', String(h));
-      for (const [k, v] of Object.entries(svc.env || {})) args.push('-e', `${k}=${v}`);
-      args.push(svc.image, ...(svc.args || []));
-    }
+    const exists = (await this.run(['inspect', '--format', '{{.State.Status}}', name])).code === 0;
     // Pulling an image can take minutes: run in the background and report through list().
-    this.jobs.set(id, { state: 'working', message: exists ? 'starting' : 'pulling image / starting' });
-    run(args, 30 * 60 * 1000).then((r) => {
-      if (r.code === 0) this.jobs.delete(id);
-      else this.jobs.set(id, { state: 'error', message: (r.err || 'docker run failed').split('\n').slice(-3).join(' ').slice(0, 400) });
-    });
+    this.jobs.set(svc.id, { state: 'working', message: exists ? 'starting' : 'pulling image / starting' });
+    const done = (r) => {
+      if (r.code === 0) this.jobs.delete(svc.id);
+      else this.jobs.set(svc.id, { state: 'error', message: (r.err || 'docker run failed').split('\n').slice(-3).join(' ').slice(0, 400) });
+    };
+    this.run(exists ? ['start', name] : this.runArgs(svc, mounts), 30 * 60 * 1000).then(done, (error) => done({ code: -1, err: error.message }));
     return { ok: true, started: true };
+  }
+
+  /** `docker run` arguments for a service's first start. */
+  runArgs(svc, mounts) {
+    const args = ['run', '-d', '--name', `shelter-${svc.id}`, '--label', `shelter.service=${svc.id}`, '--restart', 'unless-stopped',
+      '-p', `${this.bindHost}:${svc.port}:${svc.containerPort}`];
+    // --mount rather than -v: a Windows host path contains a colon.
+    for (const [, source, target] of mounts) args.push('--mount', `type=bind,source=${source},target=${target}`);
+    for (const h of svc.extraHosts || []) args.push('--add-host', String(h));
+    for (const [k, v] of Object.entries(svc.env || {})) args.push('-e', `${k}=${v}`);
+    args.push(svc.image, ...(svc.args || []));
+    return args;
   }
 }

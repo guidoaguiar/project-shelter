@@ -2,6 +2,8 @@
 import { h, api, state, toast, viewHeader, panel, field, readiness } from '../lib/core.js';
 
 const CATEGORIES = ['WATER', 'FOOD', 'MEDICAL', 'POWER', 'TOOLS', 'COMMS', 'OTHER'];
+/** Inventory order: by category as listed above, then by name. */
+const order = (a, b) => CATEGORIES.indexOf(a.category) - CATEGORIES.indexOf(b.category) || String(a.name).localeCompare(String(b.name));
 const UNITS = ['ea', 'L', 'gal', 'kg', 'lb', 'pack'];
 
 export async function render(root) {
@@ -29,7 +31,6 @@ export async function render(root) {
       h('div.stat', h('div.lbl', 'DUE < 90 D'), h('div.big' + (r.soon ? '.warn' : ''), r.soon))),
       h('p.hint', { style: 'margin:12px 0 0' }, `For a group of ${r.people} at 4 L and 2000 kcal per person per day. Water counts items in the WATER category measured in L or gal; food counts FOOD items with a kcal-per-unit figure. Change group size in Command.`));
 
-    const order = (a, b) => CATEGORIES.indexOf(a.category) - CATEGORIES.indexOf(b.category) || String(a.name).localeCompare(String(b.name));
     tableBox.replaceChildren(items.length ? h('div.scroll-x', h('table.t',
       h('thead', h('tr', h('th', 'ITEM'), h('th', 'CLASS'), h('th.num', 'QTY'), h('th', 'UNIT'), h('th.num', 'KCAL / UNIT'), h('th', 'EXPIRES'), h('th'))),
       h('tbody', [...items].sort(order).map((it) => h('tr',
@@ -38,7 +39,7 @@ export async function render(root) {
         h('td.num', h('div.row', { style: 'justify-content:flex-end;flex-wrap:nowrap' },
           h('button.btn.sm', { onclick: () => { editing = it; paintForm(); formBox.scrollIntoView({ block: 'nearest' }); } }, 'EDIT'),
           h('button.btn.sm.danger', { onclick: async () => {
-            try { await api(`/api/db/stores/${it.id}`, { method: 'DELETE' }); items = items.filter((x) => x.id !== it.id); if (editing?.id === it.id) { editing = null; paintForm(); } paint(); } catch (e) { toast(e.message, true); }
+            try { await api(`/api/db/stores/${it.id}`, { method: 'DELETE' }); items = items.filter((x) => x.id !== it.id); if (editing?.id === it.id) { editing = null; paintForm(); } paint(); } catch (error) { toast(error.message, true); }
           } }, 'DEL'))))))))
       : h('div.empty', 'NO SUPPLIES RECORDED'));
   }
@@ -62,7 +63,7 @@ export async function render(root) {
           if (editing) { const u = await api(`/api/db/stores/${editing.id}`, { method: 'PUT', body }); items = items.map((x) => (x.id === u.id ? u : x)); }
           else items = [...items, await api('/api/db/stores', { method: 'POST', body })];
           editing = null; paintForm(); paint(); toast('STORES UPDATED');
-        } catch (err) { toast(err.message, true); }
+        } catch (error) { toast(error.message, true); }
       },
     },
       h('div.fr', field('ITEM', f.name), field('CLASS', f.category), field('QUANTITY', f.qty), field('UNIT', f.unit), field('KCAL PER UNIT', f.kcal), field('EXPIRES', f.expires)),

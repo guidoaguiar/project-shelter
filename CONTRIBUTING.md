@@ -18,10 +18,30 @@ Thanks for helping. Shelter is meant to be useful when nothing else is available
 
 ## Code
 
-- Shelter has no dependencies and no build step. Keep it that way: no npm packages, no bundlers, and no external assets loaded at runtime.
+- Shelter has no runtime dependencies and no build step. Keep it that way: no npm packages in the app, no bundlers, and no external assets loaded at runtime.
+- The checks below use development tools (ESLint and the SonarQube rules) installed as `devDependencies`. Docker and the installers never install them, so nothing reaches the people running Shelter.
 - Run from source with `node server.js` (Node.js 20 or newer) and check your change in the browser.
 - Everything must keep working with no network connection.
 - Keep pull requests small and focused, and explain why the change is needed.
+
+### Checks
+
+Every pull request must pass CI before it can be merged:
+
+- **Lint**: the SonarQube "Sonar way" rules for JavaScript, the same ones SonarQube for IDE shows in VS Code (cognitive complexity, nested ternaries, regular expressions that can backtrack, and so on).
+- **Tests**: `node --test` on Node 20, 22 and 24 on Linux, and Node 22 on Windows. The tests use only Node's built-in test runner.
+
+Run the same checks locally before you push:
+
+```
+npm install        # once: development tools only
+npm run check      # lint + tests
+npm run lint:fix   # fix what can be fixed automatically
+```
+
+Add or update tests in `test/` for any change in behaviour. Server modules and the pure browser libraries in `public/js/lib/` are tested directly; `test/server.test.js` runs the whole server against a temporary data folder.
+
+If a rule is wrong for one line, disable it on that line with the reason, for example `// eslint-disable-next-line sonarjs/no-os-command-from-path -- the Docker CLI is found through PATH on purpose`. SonarQube for IDE respects the same comment.
 
 ## License
 

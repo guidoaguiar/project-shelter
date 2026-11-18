@@ -9,6 +9,77 @@ function meter(label, frac, text) {
     h('div.track', h('div.fill' + (pct > 90 ? '.hot' : ''), { style: `width:${pct.toFixed(1)}%` })));
 }
 
+const dim = (on) => (on ? 'ok' : 'dim');
+
+function uplinkText(net) {
+  if (!net.enabled) return 'CHECK DISABLED';
+  return net.online ? 'AVAILABLE' : 'OFF GRID';
+}
+
+function systemRows(y) {
+  const memUsed = y.memTotal - y.memFree;
+  return [
+    meter('CPU', y.cpu, `${Math.round(y.cpu * 100)}% / ${y.cores} CORES`),
+    meter('MEMORY', memUsed / y.memTotal, `${bytes(memUsed)} / ${bytes(y.memTotal)}`),
+    y.disk ? meter('STORAGE', 1 - y.disk.free / y.disk.total, `${bytes(y.disk.free)} FREE`) : null,
+    kv('HOST', y.host), kv('PLATFORM', `${y.platform} ${y.arch}`), kv('UPTIME', duration(y.uptime)), kv('RUNTIME', `NODE ${y.node}`),
+  ];
+}
+
+function linkRows(s) {
+  const { port, lanMode } = s.server;
+  const lan = lanMode && s.system.lan.length;
+  return [
+    kv('UPLINK', uplinkText(s.net), dim(s.net.online)),
+    kv('MODEL LINK', s.ai.online ? (s.ai.model || 'NO MODEL INSTALLED') : 'OFFLINE', dim(s.ai.online && s.ai.model)),
+    kv('DOCKER', s.docker.online ? `ENGINE ${s.docker.version}` : 'NOT RUNNING', dim(s.docker.online)),
+    kv('ACCESS', lanMode ? 'LAN MODE' : 'LOCAL ONLY'),
+    kv('ADDRESS', lan ? s.system.lan.map((ip) => `${ip}:${port}`).join('  ') : `localhost:${port}`),
+    h('p.hint', lanMode
+      ? 'Other devices on this network can open the address above. There is no login: do not expose this node to the internet.'
+      : 'Serving this machine only. Restart with "npm run lan" to share with phones and tablets on your network.'),
+  ];
+}
+
+function positionRows(pos, now) {
+  const moon = moonPhase(now);
+  const moonRow = kv('MOON', `${moon.name} ${Math.round(moon.illumination * 100)}%`);
+  if (!pos) {
+    return [
+      h('div.empty', 'POSITION NOT SET'),
+      h('p.hint', 'Enter your coordinates under Configuration, or pick a point in the Map module, to get grid reference and sun times.'),
+      moonRow,
+    ];
+  }
+  const sun = sunTimes(now.getFullYear(), now.getMonth() + 1, now.getDate(), pos.lat, pos.lon);
+  const hrs = Math.floor(sun.dayHours), mins = Math.round((sun.dayHours - hrs) * 60);
+  return [
+    h('div.big', toMGRS(pos.lat, pos.lon, 4) || 'POLAR REGION'),
+    h('div.hint', { style: 'margin:4px 0 10px' }, toDMS(pos.lat, pos.lon)),
+    kv('SUNRISE', sun.polar ? `POLAR ${sun.polar.toUpperCase()}` : hhmm(sun.rise)),
+    kv('SUNSET', sun.polar ? '—' : hhmm(sun.set)),
+    kv('DAYLIGHT', `${hrs}H ${String(mins).padStart(2, '0')}M`),
+    moonRow,
+    h('p.hint', 'Sun times are shown in this device\'s time zone.'),
+  ];
+}
+
+const days = (n) => (n >= 100 ? Math.round(n) : n.toFixed(1));
+
+function readinessRows(r) {
+  return [
+    h('div.stat-row',
+      h('div.stat', h('div.lbl', 'WATER'), h('div.big', days(r.waterDays), h('small', 'DAYS'))),
+      h('div.stat', h('div.lbl', 'FOOD'), h('div.big', days(r.foodDays), h('small', 'DAYS')))),
+    h('div', { style: 'margin-top:12px' },
+      kv('GROUP SIZE', `${r.people} ${r.people === 1 ? 'PERSON' : 'PEOPLE'}`),
+      kv('ITEMS TRACKED', r.count),
+      kv('EXPIRED', r.expired, r.expired ? 'bad' : 'dim'),
+      kv('EXPIRING < 90 DAYS', r.soon, r.soon ? 'warn' : 'dim')),
+    h('p.hint', r.count ? 'Based on 4 L of water and 2000 kcal per person per day.' : 'Nothing recorded yet. Add supplies in the Stores module.'),
+  ];
+}
+
 export async function render(root) {
   const [index, stores] = await Promise.all([api('/api/manual').catch(() => []), api('/api/db/stores').catch(() => [])]);
   const sysBody = h('div.pb'), linkBody = h('div.pb'), posBody = h('div.pb'), readyBody = h('div.pb');
@@ -16,58 +87,10 @@ export async function render(root) {
   function paint() {
     const s = state.status;
     if (!s) { sysBody.replaceChildren(h('div.empty', 'NO TELEMETRY')); return; }
-    const y = s.system;
-    const memUsed = y.memTotal - y.memFree;
-    sysBody.replaceChildren(
-      meter('CPU', y.cpu, `${Math.round(y.cpu * 100)}% / ${y.cores} CORES`),
-      meter('MEMORY', memUsed / y.memTotal, `${bytes(memUsed)} / ${bytes(y.memTotal)}`),
-      y.disk ? meter('STORAGE', 1 - y.disk.free / y.disk.total, `${bytes(y.disk.free)} FREE`) : null,
-      kv('HOST', y.host), kv('PLATFORM', `${y.platform} ${y.arch}`), kv('UPTIME', duration(y.uptime)), kv('RUNTIME', `NODE ${y.node}`));
-
-    const port = s.server.port;
-    linkBody.replaceChildren(
-      kv('UPLINK', s.net.enabled ? (s.net.online ? 'AVAILABLE' : 'OFF GRID') : 'CHECK DISABLED', s.net.online ? 'ok' : 'dim'),
-      kv('MODEL LINK', s.ai.online ? (s.ai.model || 'NO MODEL INSTALLED') : 'OFFLINE', s.ai.online && s.ai.model ? 'ok' : 'dim'),
-      kv('DOCKER', s.docker.online ? `ENGINE ${s.docker.version}` : 'NOT RUNNING', s.docker.online ? 'ok' : 'dim'),
-      kv('ACCESS', s.server.lanMode ? 'LAN MODE' : 'LOCAL ONLY'),
-      kv('ADDRESS', s.server.lanMode && y.lan.length ? y.lan.map((ip) => `${ip}:${port}`).join('  ') : `localhost:${port}`),
-      h('p.hint', s.server.lanMode
-        ? 'Other devices on this network can open the address above. There is no login: do not expose this node to the internet.'
-        : 'Serving this machine only. Restart with "npm run lan" to share with phones and tablets on your network.'));
-
-    const pos = home();
-    const now = new Date();
-    const moon = moonPhase(now);
-    if (pos) {
-      const sun = sunTimes(now.getFullYear(), now.getMonth() + 1, now.getDate(), pos.lat, pos.lon);
-      const hrs = Math.floor(sun.dayHours), mins = Math.round((sun.dayHours - hrs) * 60);
-      posBody.replaceChildren(
-        h('div.big', toMGRS(pos.lat, pos.lon, 4) || 'POLAR REGION'),
-        h('div.hint', { style: 'margin:4px 0 10px' }, toDMS(pos.lat, pos.lon)),
-        kv('SUNRISE', sun.polar ? `POLAR ${sun.polar.toUpperCase()}` : hhmm(sun.rise)),
-        kv('SUNSET', sun.polar ? '—' : hhmm(sun.set)),
-        kv('DAYLIGHT', `${hrs}H ${String(mins).padStart(2, '0')}M`),
-        kv('MOON', `${moon.name} ${Math.round(moon.illumination * 100)}%`),
-        h('p.hint', 'Sun times are shown in this device\'s time zone.'));
-    } else {
-      posBody.replaceChildren(
-        h('div.empty', 'POSITION NOT SET'),
-        h('p.hint', 'Enter your coordinates under Configuration, or pick a point in the Map module, to get grid reference and sun times.'),
-        kv('MOON', `${moon.name} ${Math.round(moon.illumination * 100)}%`));
-    }
-
-    const r = readiness(stores, state.settings?.people);
-    const days = (n) => (n >= 100 ? Math.round(n) : n.toFixed(1));
-    readyBody.replaceChildren(
-      h('div.stat-row',
-        h('div.stat', h('div.lbl', 'WATER'), h('div.big', days(r.waterDays), h('small', 'DAYS'))),
-        h('div.stat', h('div.lbl', 'FOOD'), h('div.big', days(r.foodDays), h('small', 'DAYS')))),
-      h('div', { style: 'margin-top:12px' },
-        kv('GROUP SIZE', `${r.people} ${r.people === 1 ? 'PERSON' : 'PEOPLE'}`),
-        kv('ITEMS TRACKED', r.count),
-        kv('EXPIRED', r.expired, r.expired ? 'bad' : 'dim'),
-        kv('EXPIRING < 90 DAYS', r.soon, r.soon ? 'warn' : 'dim')),
-      h('p.hint', r.count ? 'Based on 4 L of water and 2000 kcal per person per day.' : 'Nothing recorded yet. Add supplies in the Stores module.'));
+    sysBody.replaceChildren(...systemRows(s.system));
+    linkBody.replaceChildren(...linkRows(s));
+    posBody.replaceChildren(...positionRows(home(), new Date()));
+    readyBody.replaceChildren(...readinessRows(readiness(stores, state.settings?.people)));
   }
 
   // Field brief: one manual entry per day, chosen by date.
@@ -105,7 +128,7 @@ export async function render(root) {
         await saveSettings({ callsign: f.callsign.value, people: f.people.value, lat: f.lat.value.trim(), lon: f.lon.value.trim(), ai });
         f.apiKey.value = '';
         toast('CONFIGURATION SAVED');
-      } catch (err) { toast(err.message, true); }
+      } catch (error) { toast(error.message, true); }
     },
   },
     h('div.fr', field('CALLSIGN', f.callsign), field('GROUP SIZE', f.people), field('LATITUDE', f.lat), field('LONGITUDE', f.lon)),
