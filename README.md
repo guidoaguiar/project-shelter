@@ -16,7 +16,7 @@ A field manual, a local AI advisor, an offline map and field tools that run on h
 
 </div>
 
-<img width="1718" height="955" alt="The Shelter interface: Command module with host telemetry, link status, sun and moon, and supply readiness" src="https://github.com/user-attachments/assets/407579a5-04bf-44d2-88b6-b29b1159a492" />
+<img width="960" alt="Shelter demo: searching the field manual, asking the advisor, the offline map, and switching to night-vision and daylight modes" src="docs/demo.gif" />
 
 ## Why Shelter
 
