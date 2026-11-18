@@ -1,5 +1,5 @@
 <div align="center">
-<img width="1254" height="1254" alt="image" src="https://github.com/user-attachments/assets/5895e7f0-d945-4838-9f4f-9a18fc25fc28" />
+<img width="250" height="250" alt="image" src="https://github.com/user-attachments/assets/5895e7f0-d945-4838-9f4f-9a18fc25fc28" />
 
 # SHELTER
 
