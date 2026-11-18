@@ -1,0 +1,15 @@
+# Docker Desktop (macOS, Windows): bridged network with the port published on
+# SHELTER_BIND. Ollama and Depot services are reached through host.docker.internal.
+services:
+  shelter:
+    hostname: ${SHELTER_HOSTNAME:-shelter}
+    ports:
+      - "${SHELTER_BIND:-127.0.0.1}:${SHELTER_PORT:-4077}:4077"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 4077
+      SHELTER_AI_URL: ${SHELTER_AI_URL:-http://host.docker.internal:11434}
+      # The container cannot see the host's network interfaces; the installer records them here.
+      SHELTER_HOST_LAN: ${SHELTER_HOST_LAN:-}

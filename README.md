@@ -6,23 +6,115 @@ An offline-first survival knowledge node. It runs on hardware you own and keeps 
 
 Inspired by [Project N.O.M.A.D.](https://github.com/crosstalk-solutions/project-nomad). Shelter is an independent project and shares no code with it.
 
-## Run
+## Install
 
-Requires Node.js 20 or newer. There are no dependencies to install.
+Shelter runs in Docker, which also runs its local AI and the Depot services. The installers set up Docker for you.
 
-```
-node server.js
-```
+**Linux is the recommended host.** Use a dedicated machine or a mini PC running Ubuntu 24.04 LTS or newer, or Debian 12 or newer. macOS and Windows work through Docker Desktop, which must be running for Shelter to be up, and they have one limitation (see [Platform notes](#platform-notes)).
 
-Open http://localhost:4077.
+| | Minimum | Recommended (with local AI) |
+|---|---|---|
+| CPU | 64-bit, 2 cores | 4+ cores |
+| RAM | 2 GB | 8 GB or more |
+| Disk | 5 GB free | 50 GB+ for AI models and offline libraries |
 
-To serve phones and tablets on your network:
-
-```
-node server.js --lan
-```
+You need an internet connection during install. After that, Shelter works offline.
 
 Shelter has no login. Do not expose it to the internet.
+
+### Quick install
+
+Open a terminal and paste the line for your system. The installer checks for Docker and installs it if missing, downloads Shelter and starts it. It asks a few questions; pressing Enter accepts the default:
+
+- the port (default 4077)
+- whether phones and tablets on your network may connect (default no)
+- whether to set up the local AI now (Ollama with `llama3.2:3b`, about 2.5 GB)
+
+**Linux** (Ubuntu, Debian, Raspberry Pi OS, Fedora, Arch and others):
+
+```
+curl -fsSL https://raw.githubusercontent.com/guidoaguiar/project-shelter/main/install/install.sh -o install.sh && sudo bash install.sh
+```
+
+**macOS** (install [Docker Desktop](https://www.docker.com/products/docker-desktop/) or [OrbStack](https://orbstack.dev) first, or let the installer use Homebrew):
+
+```
+curl -fsSL https://raw.githubusercontent.com/guidoaguiar/project-shelter/main/install/install.sh -o install.sh && bash install.sh
+```
+
+**Windows 10/11** (PowerShell, not as administrator):
+
+```
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/guidoaguiar/project-shelter/main/install/install.ps1 | iex"
+```
+
+When the installer finishes, open http://localhost:4077. Shelter starts again on its own after a reboot. On macOS and Windows that requires Docker Desktop to start at sign-in, which is its default.
+
+| | Linux | macOS | Windows |
+|---|---|---|---|
+| Program files | `/opt/shelter/app` | `~/Shelter/app` | `%USERPROFILE%\Shelter\app` |
+| Your data | `/opt/shelter/data` | `~/Shelter/data` | `%USERPROFILE%\Shelter\data` |
+
+**Update:** run the same command again. Your data, settings, added manual files and `depot.custom.json` are kept, but edits to built-in manual files are replaced. On Linux you can also run `sudo shelter update`.
+
+**Manage (Linux and macOS):** `shelter status | logs | stop | start | restart | update | open`. On macOS the command is `~/Shelter/shelter`.
+
+**Uninstall:** run the installer with `--uninstall` (Linux, macOS) or `-Uninstall` (Windows). It asks before deleting your data.
+
+**Installer options:**
+
+| Linux, macOS | Windows | Effect |
+|---|---|---|
+| `--port N` | `-Port N` | Web interface port |
+| `--lan` / `--local` | `-Lan` / `-Local` | Serve your network, or this machine only |
+| `--ai` / `--no-ai` | `-Ai` / `-NoAi` | Set up the local AI, or skip the question |
+| `--dir PATH` | `-Dir PATH` | Install somewhere else |
+| `--yes` | `-Yes` | Accept all defaults without asking |
+| `--branch NAME` | `-Branch NAME` | Install another branch |
+| `--source PATH` | `-Source PATH` | Install from a local checkout |
+
+Pass options after the script name: `sudo bash install.sh --lan --no-ai`. On Windows, use this form:
+
+```
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/guidoaguiar/project-shelter/main/install/install.ps1))) -Lan -NoAi
+```
+
+### Advanced install
+
+For people who know Docker and want to manage the stack themselves. The installers do exactly this.
+
+```
+git clone https://github.com/guidoaguiar/project-shelter.git
+cd project-shelter
+cp .env.example .env        # set SHELTER_DATA_DIR to an absolute path, pick the COMPOSE_FILE line for your OS
+docker compose up -d --build
+```
+
+The stack is one container built from the [Dockerfile](Dockerfile). It holds Node and the Docker CLI, and the Depot uses the CLI to manage service containers through the host's Docker socket. The [compose.yaml](compose.yaml) file holds the shared settings, and `.env` adds one override through `COMPOSE_FILE`:
+
+- [compose.host.yaml](compose.host.yaml) (Linux): host networking. Shelter sees the real network interfaces, binds like a native process, and reaches Ollama and Depot services on `127.0.0.1`.
+- [compose.desktop.yaml](compose.desktop.yaml) (Docker Desktop): a bridged network, with the port published on `SHELTER_BIND` and Ollama reached through `host.docker.internal`.
+
+`content/` and `config/` are mounted read-only, so manual edits and `depot.custom.json` take effect without a rebuild. Data lives in `SHELTER_DATA_DIR`, mounted at `/data`. Depot services get bind mounts under `SHELTER_DATA_DIR/depot/<id>`, and the Docker daemon resolves those on the host, which is why Shelter needs the host path.
+
+The Docker socket gives Shelter full control of Docker on the host. If you do not want the Depot, remove that volume line. The Depot then shows Docker as offline, and everything else still works.
+
+### From source, without Docker
+
+For development. Requires Node.js 20 or newer. There are no dependencies to install.
+
+```
+node server.js          # http://localhost:4077
+node server.js --lan    # also serve phones and tablets on your network
+```
+
+The Depot then uses the Docker CLI on the same machine, if there is one.
+
+### Platform notes
+
+- **Linux** runs Shelter with host networking, so it behaves like a native install. The Depot can tell the host machine apart from other devices, so its controls stay available on the host in network mode.
+- **macOS and Windows** run Shelter inside Docker Desktop's virtual machine. Docker Desktop hides where requests come from, so in network mode Shelter cannot tell your computer from a phone. The Depot's start/stop buttons are therefore off in network mode on these systems, unless you set `SHELTER_REMOTE_ADMIN=1`, which allows them for every device on your network. In local mode they work normally.
+- **Windows:** Docker Desktop must use Linux containers (its default). On first network use, Windows Firewall may ask about Docker; allow it on private networks.
 
 ## Modules
 
@@ -41,7 +133,15 @@ The display button in the top bar cycles three modes: dark, night vision (red on
 
 ## Local AI
 
-The Advisor talks to [Ollama](https://ollama.com) at `http://127.0.0.1:11434` by default. Install Ollama (or deploy it from the Depot), pull a model such as `llama3.2:3b`, and the AI indicator in the top bar turns on.
+The Advisor talks to [Ollama](https://ollama.com). The installers can set it up for you. Otherwise, deploy Ollama from the Depot, or install it natively, then pull a model:
+
+```
+docker exec shelter-ollama ollama pull llama3.2:3b
+```
+
+The AI indicator in the top bar then turns on. On Linux with an NVIDIA GPU and the NVIDIA Container Toolkit, the installer gives Ollama the GPU.
+
+The default address is `http://127.0.0.1:11434` on Linux and `http://host.docker.internal:11434` under Docker Desktop.
 
 Any OpenAI-compatible server (LM Studio, llama.cpp) also works: choose it under Command, Configuration, and include `/v1` in the URL.
 
@@ -53,7 +153,7 @@ All of it is plain Markdown in this repository: edit the files and commit.
 
 ## Adding to the manual
 
-Drop a Markdown file into `content/manual`. It is picked up without a restart.
+Drop a Markdown file into `content/manual`. On an installed node, that is `app/content/manual` in the install folder, for example `/opt/shelter/app/content/manual`. It is picked up without a restart.
 
 ```markdown
 # Title of the Entry
@@ -70,7 +170,7 @@ To file entries under an existing section, or as a chapter within it, start the 
 
 ## Adding your own services
 
-Create `config/depot.custom.json` with entries in the same format as `config/depot.json`, then restart. An entry whose `id` matches a built-in one replaces it.
+Create `config/depot.custom.json` (on an installed node, `app/config/depot.custom.json`) with entries in the same format as `config/depot.json`, then restart: `shelter restart`, or `docker compose restart` in the app folder. An entry whose `id` matches a built-in one replaces it.
 
 ```json
 [
@@ -90,19 +190,26 @@ Create `config/depot.custom.json` with entries in the same format as `config/dep
 ]
 ```
 
-Each name under `volumes` becomes a folder in `data/depot/<id>/`.
+Each name under `volumes` becomes a folder in `<data>/depot/<id>/`.
 
 ## Configuration
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `PORT` | `4077` | Listening port |
-| `HOST` | `127.0.0.1` | Bind address. `--lan` sets `0.0.0.0` |
-| `SHELTER_DATA` | `./data` | Where settings, notes, stores, waypoints and container data live |
-| `SHELTER_NET_CHECK` | `1.1.1.1:443` | Host probed for uplink status. Set to `off` to disable |
-| `SHELTER_REMOTE_ADMIN` | unset | Set to `1` to allow Depot control from other devices in LAN mode |
+With Docker, set these in `.env` next to `compose.yaml` (see [.env.example](.env.example)), then run `docker compose up -d`. Rerunning an installer rewrites `.env`.
 
-Back up the node by copying the `data` folder.
+| Variable (`.env`) | Default | Purpose |
+|---|---|---|
+| `SHELTER_DATA_DIR` | set by installer | Absolute host path for settings, notes, stores, waypoints and Depot data |
+| `SHELTER_PORT` | `4077` | Web interface port |
+| `SHELTER_BIND` | `127.0.0.1` | `0.0.0.0` serves phones and tablets on your network |
+| `SHELTER_AI_URL` | see [Local AI](#local-ai) | Default model server address. A URL saved under Configuration takes precedence |
+| `SHELTER_NET_CHECK` | `1.1.1.1:443` | Host probed for uplink status. Set to `off` to disable |
+| `SHELTER_REMOTE_ADMIN` | `0` | Set to `1` to allow Depot control from other devices in network mode |
+| `SHELTER_DEPOT_UID` | `1000` | Owner given to Depot service folders (`uid` or `uid:gid`, `off` to skip) |
+| `SHELTER_DEPOT_HOST_DIR` | unset | Docker Desktop on Windows: where the Docker VM sees `SHELTER_DATA_DIR/depot` |
+
+Running from source, the server reads `PORT`, `HOST` (`127.0.0.1`, or `0.0.0.0` with `--lan`), `SHELTER_DATA` (`./data`), `SHELTER_NET_CHECK`, `SHELTER_REMOTE_ADMIN` and `SHELTER_AI_URL`.
+
+Back up the node by copying the data folder.
 
 ## Layout
 
@@ -112,7 +219,10 @@ server/              manual search, storage, telemetry, model link, depot
 content/manual/      field manual (Markdown)
 config/depot.json    container catalog
 public/              interface: no build step, no external assets
-data/                created at first run
+install/             one-line installers (install.sh: Linux, macOS; install.ps1: Windows)
+Dockerfile           image: Node + Docker CLI
+compose*.yaml        Docker Compose stack and per-platform network overrides
+data/                created at first run (from source)
 ```
 
 ## Notes

@@ -37,13 +37,16 @@ export function systemStatus(dataDir) {
     const s = fs.statfsSync(dataDir);
     disk = { total: s.blocks * s.bsize, free: s.bavail * s.bsize };
   } catch { /* statfs unavailable */ }
-  const lan = [];
-  for (const list of Object.values(os.networkInterfaces())) {
-    for (const i of list || []) if (i.family === 'IPv4' && !i.internal) lan.push(i.address);
+  // In a bridged container the interfaces are Docker's, so the installer passes the host's addresses.
+  const lan = (process.env.SHELTER_HOST_LAN || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (!lan.length) {
+    for (const list of Object.values(os.networkInterfaces())) {
+      for (const i of list || []) if (i.family === 'IPv4' && !i.internal) lan.push(i.address);
+    }
   }
   return {
     system: {
-      host: os.hostname(), platform: `${os.type()} ${os.release()}`, arch: os.arch(), node: process.version,
+      host: process.env.SHELTER_HOSTNAME || os.hostname(), platform: `${os.type()} ${os.release()}`, arch: os.arch(), node: process.version,
       uptime: os.uptime(), cores: os.cpus().length, cpu: +cpuLoad.toFixed(3),
       memTotal: os.totalmem(), memFree: os.freemem(), disk, lan,
     },

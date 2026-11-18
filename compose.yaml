@@ -1,0 +1,35 @@
+# Shelter on Docker.
+#
+# The installers in install/ write a .env next to this file. To run by hand,
+# copy .env.example to .env, set SHELTER_DATA_DIR, then: docker compose up -d --build
+#
+# .env picks a network override through COMPOSE_FILE:
+#   compose.host.yaml     Linux (recommended): host networking, behaves like a native install
+#   compose.desktop.yaml  Docker Desktop on macOS and Windows: bridged, port published
+
+services:
+  shelter:
+    build: .
+    image: shelter:local
+    container_name: shelter
+    restart: unless-stopped
+    environment:
+      SHELTER_DATA: /data
+      SHELTER_PORT: ${SHELTER_PORT:-4077}
+      # 127.0.0.1 keeps Shelter on this machine; 0.0.0.0 serves phones and tablets on your network.
+      SHELTER_BIND: ${SHELTER_BIND:-127.0.0.1}
+      # The Depot hands bind mounts to the host's Docker daemon, so it needs the host path of /data.
+      SHELTER_HOST_DATA: ${SHELTER_DATA_DIR:?set SHELTER_DATA_DIR in .env (see .env.example)}
+      SHELTER_DEPOT_HOST_DIR: ${SHELTER_DEPOT_HOST_DIR:-}
+      SHELTER_HOSTNAME: ${SHELTER_HOSTNAME:-}
+      SHELTER_REMOTE_ADMIN: ${SHELTER_REMOTE_ADMIN:-0}
+      # Owner given to the service folders the Depot creates (uid or uid:gid, "off" to skip).
+      SHELTER_DEPOT_UID: ${SHELTER_DEPOT_UID:-1000}
+      SHELTER_NET_CHECK: ${SHELTER_NET_CHECK:-1.1.1.1:443}
+    volumes:
+      - ${SHELTER_DATA_DIR}:/data
+      # Mounted rather than baked in, so manual edits and depot.custom.json apply without a rebuild.
+      - ./content:/app/content:ro
+      - ./config:/app/config:ro
+      # Lets the Depot start and stop service containers. Anything with this socket controls Docker on the host.
+      - /var/run/docker.sock:/var/run/docker.sock

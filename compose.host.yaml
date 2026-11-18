@@ -1,0 +1,9 @@
+# Linux: host networking. Shelter sees the real network interfaces, binds exactly
+# like `node server.js`, and reaches Ollama and Depot services on 127.0.0.1.
+services:
+  shelter:
+    network_mode: host
+    environment:
+      HOST: ${SHELTER_BIND:-127.0.0.1}
+      PORT: ${SHELTER_PORT:-4077}
+      SHELTER_AI_URL: ${SHELTER_AI_URL:-http://127.0.0.1:11434}

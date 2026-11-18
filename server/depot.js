@@ -18,6 +18,12 @@ function run(args, timeout = 8000) {
   });
 }
 
+/** Joins path segments in the host's style, which may differ from this process's (a Windows host behind a Linux container). */
+function joinHost(root, ...parts) {
+  const sep = root.includes('\\') && !root.includes('/') ? '\\' : '/';
+  return [root.replace(/[\\/]+$/, ''), ...parts].join(sep);
+}
+
 /** Keeps only well-formed catalog entries; ids become container names and URL segments. */
 function validate(entries, source) {
   const out = [];
@@ -31,7 +37,11 @@ function validate(entries, source) {
 }
 
 export class Depot {
-  constructor(catalogFile, dataDir, bindHost) {
+  /**
+   * hostDataDir: the data folder as the Docker host sees it, when Shelter itself runs in a container.
+   * bindRoot: overrides where Docker finds depot folders (Docker Desktop on Windows needs /run/desktop/mnt/host/...).
+   */
+  constructor(catalogFile, dataDir, bindHost, { hostDataDir = '', bindRoot = '' } = {}) {
     this.catalog = validate(JSON.parse(fs.readFileSync(catalogFile, 'utf8')), path.basename(catalogFile));
     // Optional user additions: config/depot.custom.json, same format. Entries with a matching id replace the built-in one.
     const customFile = path.join(path.dirname(catalogFile), 'depot.custom.json');
@@ -45,6 +55,8 @@ export class Depot {
       } catch (err) { console.warn(`depot: could not read depot.custom.json: ${err.message}`); }
     }
     this.dataDir = dataDir;
+    this.hostDataDir = hostDataDir;
+    this.bindRoot = bindRoot;
     this.bindHost = bindHost;
     this.jobs = new Map(); // id -> { state: 'working'|'error', message }
     this.dockerCache = { at: 0, value: { online: false, version: null } };
@@ -58,16 +70,48 @@ export class Depot {
     return value;
   }
 
+  /** The service folder as this process sees it. */
   volumeDir(svc) { return path.join(this.dataDir, 'depot', svc.id); }
 
-  /** Host folder to container path pairs. "volume" mounts the service folder itself; "volumes" mounts named subfolders. */
+  /** The service folder as the person sees it on the host (shown in the interface). */
+  displayDir(svc) { return this.hostDataDir ? joinHost(this.hostDataDir, 'depot', svc.id) : this.volumeDir(svc); }
+
+  /** The service folder as the Docker daemon resolves it. */
+  bindDir(svc) {
+    if (this.bindRoot) return joinHost(this.bindRoot, svc.id);
+    if (this.hostDataDir) return joinHost(this.hostDataDir, 'depot', svc.id);
+    return this.volumeDir(svc);
+  }
+
+  /** [local folder, bind source, container path]. "volume" mounts the service folder itself; "volumes" mounts named subfolders. */
   mounts(svc) {
     const out = [];
-    if (typeof svc.volume === 'string') out.push([this.volumeDir(svc), svc.volume]);
+    if (typeof svc.volume === 'string') out.push([this.volumeDir(svc), this.bindDir(svc), svc.volume]);
     for (const [name, target] of Object.entries(svc.volumes || {})) {
-      if (/^[a-z0-9-]+$/.test(name) && typeof target === 'string' && target.startsWith('/')) out.push([path.join(this.volumeDir(svc), name), target]);
+      if (/^[a-z0-9-]+$/.test(name) && typeof target === 'string' && target.startsWith('/')) {
+        out.push([path.join(this.volumeDir(svc), name), joinHost(this.bindDir(svc), name), target]);
+      }
     }
     return out;
+  }
+
+  /**
+   * Run natively, Shelter creates service folders as the logged-in user (usually uid 1000), which is
+   * what images that drop root expect. In a container Shelter runs as root, so hand the folders over
+   * to that uid. SHELTER_DEPOT_UID changes it; "off" disables it.
+   */
+  ownFolders(svc, mounts) {
+    const setting = process.env.SHELTER_DEPOT_UID || '1000';
+    if (setting === 'off' || typeof process.getuid !== 'function' || process.getuid() !== 0) return;
+    const [uid, gid = uid] = setting.split(':').map(Number);
+    if (!Number.isInteger(uid) || !Number.isInteger(gid)) return;
+    for (const dir of [this.volumeDir(svc), ...mounts.map(([d]) => d)]) {
+      try {
+        const st = fs.statSync(dir);
+        // Only folders still owned by root, so an owner set by the service itself is left alone.
+        if (st.uid === 0) fs.chownSync(dir, uid, gid);
+      } catch { /* some host filesystems (Docker Desktop on Windows) do not support ownership */ }
+    }
   }
 
   async list() {
@@ -86,7 +130,7 @@ export class Depot {
         id: svc.id, name: svc.name, title: svc.title, desc: svc.desc, image: svc.image, port: svc.port, note: svc.note || '',
         category: svc.category, custom: !!svc.custom,
         links: (Array.isArray(svc.links) ? svc.links : []).filter((l) => l && /^https?:\/\//.test(l.url || '')).map((l) => ({ label: String(l.label || l.url), url: l.url })),
-        dataDir: this.mounts(svc).length ? this.volumeDir(svc) : null,
+        dataDir: this.mounts(svc).length ? this.displayDir(svc) : null,
         container: states.get(svc.id) || null,
         job: this.jobs.get(svc.id) || null,
       })),
@@ -110,9 +154,10 @@ export class Depot {
 
     const mounts = this.mounts(svc);
     for (const [dir] of mounts) fs.mkdirSync(dir, { recursive: true });
+    this.ownFolders(svc, mounts);
     if (mounts.length) {
       if (svc.needsFiles && !fs.readdirSync(this.volumeDir(svc)).some((f) => f.toLowerCase().endsWith(svc.needsFiles))) {
-        throw Object.assign(new Error(`no ${svc.needsFiles} files in ${this.volumeDir(svc)} — add content first`), { status: 409 });
+        throw Object.assign(new Error(`no ${svc.needsFiles} files in ${this.displayDir(svc)} — add content first`), { status: 409 });
       }
     }
     const exists = (await run(['inspect', '--format', '{{.State.Status}}', name])).code === 0;
@@ -122,7 +167,8 @@ export class Depot {
     } else {
       args = ['run', '-d', '--name', name, '--label', `shelter.service=${svc.id}`, '--restart', 'unless-stopped',
         '-p', `${this.bindHost}:${svc.port}:${svc.containerPort}`];
-      for (const [dir, target] of mounts) args.push('-v', `${dir}:${target}`);
+      // --mount rather than -v: a Windows host path contains a colon.
+      for (const [, source, target] of mounts) args.push('--mount', `type=bind,source=${source},target=${target}`);
       for (const h of svc.extraHosts || []) args.push('--add-host', String(h));
       for (const [k, v] of Object.entries(svc.env || {})) args.push('-e', `${k}=${v}`);
       args.push(svc.image, ...(svc.args || []));

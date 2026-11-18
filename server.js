@@ -17,14 +17,25 @@ const DATA = path.resolve(process.env.SHELTER_DATA || path.join(ROOT, 'data'));
 const LAN = process.argv.includes('--lan');
 const HOST = process.env.HOST || (LAN ? '0.0.0.0' : '127.0.0.1');
 const PORT = +process.env.PORT || 4077;
-const LOOPBACK_ONLY = HOST === '127.0.0.1' || HOST === 'localhost' || HOST === '::1';
+const isLoopbackHost = (h) => ['127.0.0.1', 'localhost', '::1'].includes(h);
+// SHELTER_BIND is the address clients actually reach Shelter on. In a bridged container the server
+// listens on 0.0.0.0 while Docker publishes the port on SHELTER_BIND (127.0.0.1 unless LAN mode).
+const PUBLISHED = process.env.SHELTER_BIND || HOST;
+const LOOPBACK_ONLY = isLoopbackHost(PUBLISHED);
 const REMOTE_ADMIN = process.env.SHELTER_REMOTE_ADMIN === '1';
+// Behind a port published only on the host's loopback, every client is on the host,
+// but requests arrive from the Docker gateway address rather than 127.0.0.1.
+const BEHIND_LOCAL_PUBLISH = LOOPBACK_ONLY && !isLoopbackHost(HOST);
 
 fs.mkdirSync(DATA, { recursive: true });
 const manual = new Manual(path.join(ROOT, 'content', 'manual'));
 const settings = new Settings(path.join(DATA, 'settings.json'));
 const collections = Object.fromEntries(['notes', 'stores', 'waypoints'].map((n) => [n, new Collection(path.join(DATA, `${n}.json`))]));
-const depot = new Depot(path.join(ROOT, 'config', 'depot.json'), DATA, LOOPBACK_ONLY ? '127.0.0.1' : '0.0.0.0');
+const depot = new Depot(path.join(ROOT, 'config', 'depot.json'), DATA, LOOPBACK_ONLY ? '127.0.0.1' : '0.0.0.0', {
+  // When Shelter runs in a container, Docker resolves bind mounts on the host, so it needs host paths.
+  hostDataDir: process.env.SHELTER_HOST_DATA || '',
+  bindRoot: process.env.SHELTER_DEPOT_HOST_DIR || '',
+});
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -39,6 +50,7 @@ const SECURITY = {
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const isLoopback = (req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+const canAdmin = (req) => isLoopback(req) || REMOTE_ADMIN || BEHIND_LOCAL_PUBLISH;
 
 function send(res, status, body) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...SECURITY });
@@ -126,9 +138,9 @@ async function api(req, res, url) {
 
   if (method === 'POST' && p === '/api/chat') return chat(req, res);
 
-  if (method === 'GET' && p === '/api/depot') return send(res, 200, { ...(await depot.list()), canAdmin: isLoopback(req) || REMOTE_ADMIN });
+  if (method === 'GET' && p === '/api/depot') return send(res, 200, { ...(await depot.list()), canAdmin: canAdmin(req) });
   if (method === 'POST' && (m = p.match(/^\/api\/depot\/([a-z0-9-]+)\/(start|stop|remove)$/))) {
-    if (!isLoopback(req) && !REMOTE_ADMIN) throw fail(403, 'depot control is only available from the host machine');
+    if (!canAdmin(req)) throw fail(403, 'depot control is only available from the host machine');
     return send(res, 200, await depot.action(m[1], m[2]));
   }
 
@@ -219,8 +231,10 @@ server.on('error', (e) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`\n  SHELTER // field node online`);
-  console.log(`  local   http://localhost:${PORT}`);
-  if (!LOOPBACK_ONLY) for (const ip of systemStatus(DATA).system.lan) console.log(`  lan     http://${ip}:${PORT}`);
+  // In a bridged container PORT is the internal one; SHELTER_PORT is what the host publishes.
+  const shown = process.env.SHELTER_PORT || PORT;
+  console.log(`  local   http://localhost:${shown}`);
+  if (!LOOPBACK_ONLY) for (const ip of systemStatus(DATA).system.lan) console.log(`  lan     http://${ip}:${shown}`);
   else console.log(`  lan     disabled (start with --lan to serve other devices)`);
   console.log(`  manual  ${manual.articles.length} entries   data  ${DATA}\n`);
 });

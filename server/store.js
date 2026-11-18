@@ -44,7 +44,8 @@ const DEFAULTS = {
   lat: null,
   lon: null,
   people: 2,
-  ai: { provider: 'ollama', baseUrl: 'http://127.0.0.1:11434', model: '', apiKey: '' },
+  // SHELTER_AI_URL changes the default only; a URL saved under Configuration wins.
+  ai: { provider: 'ollama', baseUrl: process.env.SHELTER_AI_URL || 'http://127.0.0.1:11434', model: '', apiKey: '' },
 };
 
 export class Settings {
