@@ -164,7 +164,7 @@ if ($Port -lt 1 -or $Port -gt 65535) { Fail "Invalid port: $Port" }
 $useLan = $false
 if ($Lan) { $useLan = $true }
 elseif (-not $Local) {
-  Info "Shelter has no login. Only allow your network if you trust everyone on it."
+  Info "Other devices get the manual, map, tools and advisor. Notes, supplies and your plan need a PIN you choose next."
   $d = if ($prevBind -eq "0.0.0.0") { "y" } else { "n" }
   $useLan = Ask "Let phones and tablets on your network open Shelter?" $d
 }
@@ -194,10 +194,12 @@ try {
   }
   if (-not $src -or -not (Test-Path (Join-Path $src "compose.yaml"))) { Fail "This does not look like Shelter (no compose.yaml)." }
 
-  # Keep what the user added: custom Depot entries and new manual files. Edited built-in files are replaced.
+  # Keep what the user added: custom Depot and kit entries, and new manual files. Edited built-in files are replaced.
   if (Test-Path $App) {
-    $custom = Join-Path $App "config\depot.custom.json"
-    if (Test-Path $custom) { Copy-Item $custom (Join-Path $src "config\") -Force }
+    foreach ($name in @("depot.custom.json", "kits.custom.json")) {
+      $custom = Join-Path $App "config\$name"
+      if (Test-Path $custom) { Copy-Item $custom (Join-Path $src "config\") -Force }
+    }
     $oldManual = Join-Path $App "content\manual"
     if (Test-Path $oldManual) {
       Get-ChildItem $oldManual -Recurse -File | ForEach-Object {
@@ -250,6 +252,19 @@ for ($i = 0; $i -lt 45; $i++) {
   try { Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/api/status" -TimeoutSec 3 -ErrorAction Stop | Out-Null; $up = $true; break } catch { Start-Sleep -Seconds 2 }
 }
 if (-not $up) { Fail "Shelter did not start. See the log with: cd `"$App`"; docker compose logs" }
+
+# ---------- access PIN (network mode) ----------
+# A new install keeps other devices read-only until a PIN is set. pin.js --setup does nothing when the
+# node was configured before (an update), apart from reporting the current setting.
+if ($useLan) {
+  Step "Access for other devices"
+  try {
+    if ($Yes) { Compose exec -T shelter node server/pin.js --setup --open }
+    else { Compose exec shelter node server/pin.js --setup }
+  } catch {
+    Warn "Could not set a PIN. Set one later with: docker exec -it shelter node server/pin.js"
+  }
+}
 
 # ---------- shortcuts ----------
 $url = "[InternetShortcut]`r`nURL=http://localhost:$Port/`r`nIconFile=$App\public\favicon.svg`r`n"

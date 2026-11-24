@@ -51,7 +51,7 @@ function bannerFor(d) {
   return null;
 }
 
-export async function render(root) {
+export async function render(root, _arg, { code } = {}) {
   const banner = h('div'), tabs = h('div.tabs', { role: 'tablist' }), grid = h('div.grid'), tally = h('span.hint');
   let alive = true, timer = null, last = null;
 
@@ -91,7 +91,7 @@ export async function render(root) {
   }
 
   root.append(
-    viewHeader('08', 'DEPOT', 'Optional heavy services, each in its own container. Images download once, then run offline.', tally),
+    viewHeader(code, 'DEPOT', 'Optional heavy services, each in its own container. Images download once, then run offline.', tally),
     banner, tabs, grid,
     h('p.hint', { style: 'margin-top:12px' }, 'First deployment pulls the image and needs a link, as do the SOURCES links: fetch content while you have one. Add your own services in config/depot.custom.json (same format as config/depot.json), then restart the node.'));
   await load();

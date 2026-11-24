@@ -221,6 +221,12 @@ table.t .num { text-align: right; font-variant-numeric: tabular-nums; }
 #toast.show { opacity: 1; transform: none; }
 #toast.err { border-left-color: var(--bad); }
 
+/* ---------- access ---------- */
+.tag.guest { color: var(--warn); border-color: var(--warn); }
+.tag.guest[hidden] { display: none; }
+.rail a.locked { color: var(--faint); }
+.rail a.locked::after { content: "LOCKED"; margin-left: auto; font-size: 8px; letter-spacing: .14em; color: var(--faint); }
+
 /* ---------- responsive ---------- */
 @media (max-width: 1100px) {
   .tele.opt { display: none; }
@@ -283,3 +289,73 @@ table.t .num { text-align: right; font-variant-numeric: tabular-nums; }
 a.colcard { display: block; text-decoration: none; }
 .colcard .name { margin: 0 0 4px; }
 .colcard .desc { margin-top: 8px; font-size: 12px; }
+
+/* ---------- plan, kits, first aid ---------- */
+.tag.warn { border-color: var(--warn); color: var(--warn); }
+.tabs a { font-size: 10px; letter-spacing: .18em; border-bottom: 2px solid transparent; color: var(--dim); padding: 8px 14px; white-space: nowrap; text-decoration: none; }
+.tabs a:hover { color: var(--text); }
+.tabs a.active { color: var(--text); border-bottom-color: var(--accent); }
+.lbl { font-size: 9px; letter-spacing: .2em; color: var(--dim); }
+label.chk { display: inline-flex; align-items: center; gap: 8px; font-size: 10px; letter-spacing: .14em; color: var(--dim); cursor: pointer; margin-top: 8px; }
+label.chk input { width: auto; }
+.hint.warn { color: var(--warn); } .hint.bad { color: var(--bad); }
+.checklist { list-style: none; margin: 8px 0 12px; padding: 0; }
+.checklist li { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px dashed var(--line); font: 13px/1.4 var(--sans); }
+.checklist li.done { color: var(--dim); }
+.checklist .mark { width: 14px; color: var(--warn); flex: none; }
+.checklist li.done .mark { color: var(--ok); }
+.check-list { display: flex; flex-direction: column; gap: 6px; }
+.check-row { display: flex; align-items: center; gap: 14px; padding: 12px; border: 1px solid var(--line2); background: var(--bg); font: 15px/1.4 var(--sans); cursor: pointer; }
+.check-row input { width: 22px; height: 22px; flex: none; }
+.check-row span:nth-child(2) { flex: 1; }
+.check-row:has(input:checked) { color: var(--dim); text-decoration: line-through; }
+ol.route { margin: 8px 0; padding-left: 22px; font-size: 12px; }
+ol.route li { padding: 3px 0; }
+tr.active td { background: var(--raise); }
+.btn.firstaid { border-color: var(--bad); color: var(--bad); text-decoration: none; flex: none; }
+.btn.firstaid:hover { background: var(--bad); color: var(--bg); }
+.colcard.aid { border-left: 3px solid var(--bad); text-decoration: none; }
+.colcard.aid .name { font-size: 16px; }
+@media (max-width: 480px) { .btn.firstaid { padding: 6px 8px; letter-spacing: .08em; } }
+
+/* ---------- print: pages built by printDoc(), or a plain print of the current view ---------- */
+#print { display: none; }
+@media print {
+  :root, :root[data-theme] {
+    --bg: #fff; --bg2: #fff; --panel: #fff; --raise: #fff; --line: #bbb; --line2: #888;
+    --text: #000; --dim: #333; --faint: #666; --accent: #000; --accent-ink: #fff; --ok: #000; --warn: #000; --bad: #000;
+  }
+  html, body { height: auto; background: #fff; color: #000; }
+  body { font: 11pt/1.45 var(--sans); }
+  @page { margin: 14mm; }
+  .topbar, .rail, .statusline, #toast, .btn, .tabs, .actions, form, input, select, textarea, canvas { display: none !important; }
+  #app { display: block; height: auto; }
+  main { padding: 0; overflow: visible; }
+  body.printing #app { display: none !important; }
+  body.printing #print { display: block; }
+  #print .print-head { display: flex; justify-content: space-between; gap: 16px; border-bottom: 2px solid #000; padding-bottom: 6px; margin-bottom: 14px; font: 600 10pt var(--mono); letter-spacing: .12em; }
+  #print .print-head span { font-weight: 400; color: #333; }
+  #print h1, #print h2, #print h3 { font-family: var(--mono); letter-spacing: .06em; break-after: avoid; }
+  #print h1 { font-size: 16pt; margin: 0 0 8px; }
+  #print h2 { font-size: 13pt; margin: 14px 0 6px; }
+  #print h3 { font-size: 11pt; margin: 10px 0 4px; }
+  #print .page + .page { break-before: page; }
+  #print table { width: 100%; border-collapse: collapse; margin: 6px 0 10px; font-size: 9.5pt; }
+  #print th, #print td { border: 1px solid #999; padding: 3px 6px; text-align: left; vertical-align: top; }
+  #print table, #print figure, #print .print-block, #print .wallet, #print .print-card, #print img { break-inside: avoid; }
+  #print img { max-width: 100%; }
+  #print a { color: #000; text-decoration: none; }
+  #print a[href^="http"]::after { content: " (" attr(href) ")"; font-size: 8pt; }
+  #print .hint { font-size: 8.5pt; color: #333; }
+  #print .print-checklist { list-style: none; padding: 0; }
+  #print .print-checklist li { padding: 4px 0 4px 26px; position: relative; border-bottom: 1px solid #ddd; }
+  #print .print-checklist li::before { content: ""; position: absolute; left: 0; top: 5px; width: 12px; height: 12px; border: 1.5px solid #000; }
+  #print .print-cards { columns: 2; column-gap: 10mm; }
+  #print .print-card { border: 1px solid #000; padding: 6px 8px; margin: 0 0 6mm; font-size: 9pt; }
+  #print .print-card h2 { margin-top: 0; font-size: 11pt; }
+  #print .wallet-pair { display: flex; }
+  #print .wallet { width: 85mm; height: 55mm; overflow: hidden; border: 1px dashed #000; padding: 3mm; font-size: 6.5pt; line-height: 1.3; }
+  #print .wallet + .wallet { border-left-style: dotted; }
+  #print .wallet-title, #print .wallet-sub { font: 600 7pt var(--mono); letter-spacing: .12em; margin: 0 0 1.5mm; }
+  #print .wallet-sub { margin-top: 2mm; }
+}

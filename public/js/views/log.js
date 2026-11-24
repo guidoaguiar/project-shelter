@@ -1,5 +1,6 @@
 // 06 LOG — field notes in Markdown, stored on this node.
-import { h, api, toast, viewHeader, panel } from '../lib/core.js';
+import { h, api, toast, viewHeader, panel, isGuest, lockedView, printDoc, printButton } from '../lib/core.js';
+import { notesMarkdown, download, today } from '../lib/export.js';
 import { md } from '../lib/md.js';
 
 let selected = null;
@@ -8,7 +9,8 @@ const pad2 = (n) => String(n).padStart(2, '0');
 /** Date and local time of an ISO timestamp: YYYY-MM-DD HH:MM. */
 const when = (iso) => { const d = new Date(iso); return `${d.toISOString().slice(0, 10)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
 
-export async function render(root) {
+export async function render(root, _arg, { code } = {}) {
+  if (isGuest()) { root.append(...lockedView(code, 'LOG')); return; }
   let notes = await api('/api/db/notes');
   const list = h('div.list.list-scroll');
   const editor = h('div');
@@ -59,7 +61,8 @@ export async function render(root) {
       h('div.ph', h('span', 'ENTRY'), stamp),
       h('div.pb', h('div', { style: 'margin-bottom:10px' }, titleEl), bodyEl, preview,
         h('div.row', { style: 'margin-top:10px;justify-content:space-between' },
-          h('div.row', toggle, h('button.btn', { onclick: save }, 'SAVE')),
+          h('div.row', toggle, h('button.btn', { onclick: save }, 'SAVE'),
+            printButton(() => printDoc(`LOG: ${(titleEl.value || 'UNTITLED').toUpperCase()}`, h('div.prose', { html: md(bodyEl.value || '*Empty entry.*') })))),
           h('button.btn.danger', { onclick: async () => {
             if (!confirm(`Delete "${doomed.title || 'UNTITLED'}"? This cannot be undone.`)) return;
             clearTimeout(timer); dirty = false;
@@ -85,7 +88,9 @@ export async function render(root) {
   window.addEventListener('keydown', onKey);
 
   root.append(
-    viewHeader('06', 'LOG', 'Field notes, plans and records. Saved automatically to this node.', h('button.btn.primary', { onclick: create }, 'NEW ENTRY')),
+    viewHeader(code, 'LOG', 'Field notes, plans and records. Saved automatically to this node.',
+      h('button.btn.ghost', { onclick: async () => { await save(); download(`shelter-log-${today()}.md`, notesMarkdown(notes), 'text/markdown'); } }, 'EXPORT MARKDOWN'),
+      h('button.btn.primary', { onclick: create }, 'NEW ENTRY')),
     h('div.split', h('div.sticky', panel('ENTRIES', 'LOG', list)), editor));
   await open(notes.some((n) => n.id === selected) ? selected : sorted()[0]?.id ?? null);
   return () => { window.removeEventListener('keydown', onKey); return save(); };

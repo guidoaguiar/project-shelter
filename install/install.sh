@@ -231,7 +231,7 @@ PREV_BIND="$(env_get SHELTER_BIND "$PREV_ENV")"
 [[ "$PORT" =~ ^[0-9]+$ && "$PORT" -ge 1 && "$PORT" -le 65535 ]] || die "Invalid port: $PORT"
 
 if [[ -z "$LAN" ]]; then
-  info "Shelter has no login. Only allow your network if you trust everyone on it."
+  info "Other devices get the manual, map, tools and advisor. Notes, supplies and your plan need a PIN you choose next."
   if ask "Let phones and tablets on your network open Shelter?" "$([[ $PREV_BIND == 0.0.0.0 ]] && echo y || echo n)"; then LAN=1; else LAN=0; fi
 fi
 BIND="127.0.0.1"; [[ $LAN == 1 ]] && BIND="0.0.0.0"
@@ -256,9 +256,11 @@ else
 fi
 [[ -f "$TMP/src/compose.yaml" && -f "$TMP/src/server.js" ]] || die "This does not look like Shelter (no compose.yaml)."
 
-# Keep what the user added: custom Depot entries and new manual files. Edited built-in files are replaced.
+# Keep what the user added: custom Depot and kit entries, and new manual files. Edited built-in files are replaced.
 if [[ -d "$APP" ]]; then
-  [[ -f "$APP/config/depot.custom.json" ]] && cp -p "$APP/config/depot.custom.json" "$TMP/src/config/"
+  for f in depot.custom.json kits.custom.json; do
+    if [[ -f "$APP/config/$f" ]]; then cp -p "$APP/config/$f" "$TMP/src/config/"; fi
+  done
   if [[ -d "$APP/content/manual" ]]; then
     (cd "$APP/content/manual" && find . -type f) | while IFS= read -r f; do
       if [[ ! -e "$TMP/src/content/manual/$f" ]]; then
@@ -316,6 +318,18 @@ for _ in $(seq 1 45); do
 done
 [[ $UP == 1 ]] || die "Shelter did not start. See the log with: cd $APP && docker compose logs"
 
+# ---------- access PIN (network mode) ----------
+# A new install keeps other devices read-only until a PIN is set. pin.js --setup does nothing when the
+# node was configured before (an update), apart from reporting the current setting.
+if [[ $LAN == 1 ]]; then
+  step "Access for other devices"
+  if [[ $ASSUME_YES == 1 || $HAS_TTY == 0 ]]; then
+    compose exec -T shelter node server/pin.js --setup --open || warn "Could not set the access policy. Set it under Command, Configuration."
+  else
+    compose exec shelter node server/pin.js --setup <&3 || warn "Could not set a PIN. Set one later with: $([[ $PLATFORM == linux ]] && echo "sudo shelter pin" || echo "$BASE/shelter pin")"
+  fi
+fi
+
 # ---------- firewall (Linux, network mode) ----------
 if [[ $PLATFORM == linux && $LAN == 1 ]]; then
   if need_cmd ufw && ufw status 2>/dev/null | grep -q "Status: active"; then
@@ -340,7 +354,8 @@ case "\${1:-}" in
   logs)    docker compose logs -f --tail 100 ;;
   update)  curl -fsSL https://raw.githubusercontent.com/$REPO/$BRANCH/install/install.sh -o /tmp/shelter-install.sh && bash /tmp/shelter-install.sh --yes --dir "$BASE" ;;
   open)    url="http://localhost:$PORT"; (xdg-open "\$url" || open "\$url") >/dev/null 2>&1 || echo "\$url" ;;
-  *) echo "Usage: shelter start|stop|restart|status|logs|update|open"; exit 1 ;;
+  pin)     shift; docker compose exec shelter node server/pin.js "\$@" ;;
+  *) echo "Usage: shelter start|stop|restart|status|logs|update|open|pin"; exit 1 ;;
 esac
 EOF
 chmod +x "$HELPER"
@@ -392,6 +407,6 @@ fi
 echo
 info "It starts by itself when this computer boots."
 [[ $PLATFORM == mac ]] && info "Docker Desktop must be running: enable 'Start Docker Desktop when you sign in' in its settings."
-info "Manage it with:  $HELPER_CMD status | logs | stop | start | update"
+info "Manage it with:  $HELPER_CMD status | logs | stop | start | update | pin"
 info "Back up your node by copying $DATA"
 echo

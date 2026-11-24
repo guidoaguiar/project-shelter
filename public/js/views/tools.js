@@ -237,7 +237,7 @@ function codec() {
 
 const TOOLS = [['coord', 'COORDINATES', coord], ['sun', 'SUN / MOON', sun], ['morse', 'MORSE', morse], ['water', 'WATER', water], ['pace', 'PACE / BEARING', pace], ['codec', 'CODEC', codec]];
 
-export function render(root, arg) {
+export function render(root, arg, { code } = {}) {
   if (TOOLS.some(([id]) => id === arg)) active = arg;
   const body = h('div');
   const tabs = h('div.tabs', { role: 'tablist' });
@@ -246,7 +246,7 @@ export function render(root, arg) {
     tabs.replaceChildren(...TOOLS.map(([id, label]) => h('button', { role: 'tab', class: id === active ? 'active' : null, onclick: () => { active = id; show(); } }, label)));
     body.replaceChildren(TOOLS.find(([id]) => id === active)[2]());
   }
-  root.append(viewHeader('05', 'TOOLS', 'Calculators for navigation, signalling and water. All computed on this device.'), tabs, body);
+  root.append(viewHeader(code, 'TOOLS', 'Calculators for navigation, signalling and water. All computed on this device.'), tabs, body);
   show();
   return stopAudio;
 }

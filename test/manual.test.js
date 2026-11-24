@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Manual } from '../server/manual.js';
 import { tmpDir } from './helpers.js';
 
@@ -94,4 +95,31 @@ test('reloads when files change', (t) => {
 
 test('a missing folder gives an empty manual', (t) => {
   assert.deepEqual(new Manual(path.join(tmpDir(t), 'none')).index(), []);
+});
+
+test('shipped content: emergencies section, first aid cards and the radio reference', () => {
+  const manual = new Manual(path.join(path.dirname(path.dirname(fileURLToPath(import.meta.url))), 'content', 'manual'));
+  const index = manual.index();
+  const ids = index.map((a) => a.id);
+  assert.equal(new Set(ids).size, ids.length, 'entry ids are unique');
+
+  const emergencies = index.filter((a) => a.category === 'EMERGENCIES');
+  assert.ok(emergencies.length >= 10, `EMERGENCIES has ${emergencies.length} entries`);
+
+  const cards = index.filter((a) => a.tags.includes('card'));
+  assert.ok(cards.length >= 10, `${cards.length} first aid cards`);
+  for (const c of cards) {
+    const body = manual.get(c.id).body.replaceAll('*', '');
+    assert.match(body, /^Call emergency services/, `${c.title} starts with the call to emergency services`);
+    assert.match(body, /\nSources?: /, `${c.title} cites a source`);
+    assert.equal(c.category, 'MEDICAL');
+    assert.equal(c.group, 'First Aid Cards');
+    const steps = body.match(/^\d+\. /gm) || [];
+    assert.ok(steps.length <= 8, `${c.title} has at most 8 numbered steps`);
+  }
+
+  for (const [q, want] of [['earthquake', 'Earthquake'], ['CPR', 'CPR'], ['shelter in place', 'Shelter in Place'], ['NOAA weather radio frequency', 'Emergency Radio Frequencies']]) {
+    const hits = manual.search(q, 3).map((a) => a.title);
+    assert.ok(hits.includes(want), `"${q}" finds ${want}: got ${hits.join(', ')}`);
+  }
 });

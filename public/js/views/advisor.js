@@ -35,7 +35,7 @@ function applyEvent(reply, ev) {
   }
 }
 
-export function render(root) {
+export function render(root, _arg, { code } = {}) {
   const log = h('div.chat-log');
   const input = h('textarea', { placeholder: 'Ask a question. Enter to send, Shift+Enter for a new line.', 'aria-label': 'Question' });
   const send = h('button.btn.primary', 'SEND');
@@ -105,7 +105,7 @@ export function render(root) {
   });
 
   root.append(
-    viewHeader('03', 'ADVISOR', 'Ask in plain language. Runs on a local model; nothing leaves this node.',
+    viewHeader(code, 'ADVISOR', 'Ask in plain language. Runs on a local model; nothing leaves this node.',
       h('button.btn.ghost', { onclick: () => { if (!busy) { history.length = 0; paint(); } } }, 'CLEAR')),
     h('section.panel', h('div.ph', h('span', 'CHANNEL'), mode),
       h('div.chat', log, h('div.chat-in', input, send))),
