@@ -42,7 +42,7 @@ Then open http://localhost:4077. That is Linux; the macOS and Windows commands, 
 
 ### Shelter and Project N.O.M.A.D.
 
-Shelter was inspired by [Project N.O.M.A.D.](https://github.com/crosstalk-solutions/project-nomad). It is an independent project and shares no code with it. Shelter's focus:
+Shelter was inspired by and based on [Project N.O.M.A.D.](https://github.com/crosstalk-solutions/project-nomad). However it is an independent project. Shelter's focus:
 
 - **Knowledge built in.** The survival manual, the AI advisor grounded in it, the map and the field tools all work out of the box. Extra services are optional.
 - **Runs where you already are.** One-line installers for Linux, macOS and Windows, or `node server.js` with no dependencies at all.
