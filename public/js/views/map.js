@@ -1,6 +1,8 @@
 // 04 MAP — offline map: world outline everywhere, plus roads, paths, water and place names
 // from street map archives stored on this node. Waypoints, range and bearing from home.
-import { h, api, saveSettings, home, toast, viewHeader, panel, kv, bytes } from '../lib/core.js';
+import { h, api, saveSettings, home, toast, viewHeader, panel, kv, bytes, isGuest, printDoc, printButton } from '../lib/core.js';
+import { MEETING, routeLegs } from '../lib/plan.js';
+import { gpx, download, today } from '../lib/export.js';
 import { toMGRS, toDMS, rangeBearing, compassPoint, parseCoord } from '../lib/geo.js';
 import { StreetLayer, mercY, invMercY, MAX_LAT, countTiles } from '../lib/streets.js';
 import { worldRings } from '../lib/world.js';
@@ -70,8 +72,18 @@ const DETAIL = [
   [10, 'REGION OVERVIEW (Z10)'],
 ];
 
-export async function render(root) {
+/** What a pick from the Plan is for: { kind: 'meeting' | 'route', key, label }, or null. */
+function pickTarget(arg) {
+  const m = /^pick\/(meeting|route)\.([A-Za-z0-9-]+)$/.exec(arg || '');
+  if (!m) return null;
+  const label = m[1] === 'meeting' ? MEETING.find(([k]) => k === m[2])?.[1] : 'ROUTE';
+  return label ? { kind: m[1], key: m[2], label } : null;
+}
+
+export async function render(root, arg, { code } = {}) {
+  const pick = isGuest() ? null : pickTarget(arg);
   let waypoints = await api('/api/db/waypoints').catch(() => []);
+  let planDoc = isGuest() ? null : await api('/api/plan').catch(() => null);
   let mapInfo = await api('/api/maps').catch(() => ({ archives: [], job: null, canAdmin: false, maxTiles: 0 }));
   const land = await loadWorld().catch(() => null);
   const pos0 = home();
@@ -179,15 +191,41 @@ export async function render(root) {
     for (const lat of lats) ctx.fillText(`${Math.abs(lat).toFixed(dp)}${hemi(lat, 'S', 'N')}`, 3, toXY(0, lat)[1] - 3);
   }
 
+  /** Plan routes as lines through their waypoints, and rings around meeting places. */
+  function paintPlan(c, label) {
+    if (!planDoc) return;
+    const accent = c('--accent');
+    ctx.strokeStyle = accent; ctx.lineWidth = 2.5; ctx.globalAlpha = 0.8; ctx.lineJoin = 'round';
+    for (const r of planDoc.routes) {
+      const pts = routeLegs(r, waypoints).points;
+      if (pts.length < 2) continue;
+      ctx.beginPath();
+      pts.forEach((p, i) => { const [x, y] = toXY(p.lon, p.lat); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+      ctx.stroke();
+      const [x, y] = toXY(pts[0].lon, pts[0].lat);
+      label(String(r.name).toUpperCase(), x + 9, y - 9, accent);
+    }
+    ctx.globalAlpha = 1;
+    for (const [k, name] of MEETING) {
+      const w = waypoints.find((x) => x.id === planDoc.meeting[k]?.waypointId);
+      if (!w) continue;
+      const [x, y] = toXY(w.lon, w.lat);
+      ctx.strokeStyle = accent; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, 10, 0, 2 * Math.PI); ctx.stroke();
+      label(`MEET: ${name}`, x + 13, y + 15, accent);
+    }
+  }
+
   /** Waypoints, home, the selected point, and a range line from home to it. */
   function paintMarks(c, label) {
     const accent = c('--accent'), text = c('--text'), bg = c('--bg');
     const pos = home();
+    ctx.font = '10px ui-monospace, Consolas, monospace';
+    paintPlan(c, label);
     if (pos && mark) {
       const [x1, y1] = toXY(pos.lon, pos.lat), [x2, y2] = toXY(mark.lon, mark.lat);
       ctx.strokeStyle = accent; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.setLineDash([]);
     }
-    ctx.font = '10px ui-monospace, Consolas, monospace';
     ctx.lineJoin = 'round';
     for (const w of waypoints) {
       const [x, y] = toXY(w.lon, w.lat);
@@ -319,11 +357,38 @@ export async function render(root) {
   }
   if (mapInfo.job?.state === 'running') poll();
 
-  function paintSide() {
+  /** Uses the marked point for the Plan: a meeting place (then back to the Plan) or the next point of a route. */
+  async function usePick(name) {
+    try {
+      const w = await api('/api/db/waypoints', { method: 'POST', body: { name: name || `${pick.label} ${waypoints.length + 1}`, lat: +mark.lat.toFixed(6), lon: +mark.lon.toFixed(6), kind: 'rally' } });
+      waypoints = [...waypoints, w];
+      const p = await api('/api/plan');
+      if (pick.kind === 'meeting') {
+        const m = p.meeting[pick.key];
+        planDoc = await api('/api/plan', { method: 'PUT', body: { meeting: { ...p.meeting, [pick.key]: { ...m, waypointId: w.id, label: m.label || w.name } } } });
+        location.hash = '#/plan/places';
+        return;
+      }
+      planDoc = await api('/api/plan', { method: 'PUT', body: { routes: p.routes.map((r) => (r.id === pick.key ? { ...r, waypointIds: [...r.waypointIds, w.id] } : r)) } });
+      toast('POINT ADDED TO THE ROUTE');
+      mark = null; paintSide(); draw();
+    } catch (error) { toast(error.message, true); }
+  }
+
+  /** Save-as-waypoint and set-as-home controls for the marked point. Guests get a hint instead. */
+  function markActions() {
+    const clear = h('button.btn.ghost', { onclick: () => { mark = null; paintSide(); draw(); } }, 'CLEAR');
+    if (isGuest()) {
+      return [h('p.hint', { style: 'margin-top:10px' }, 'Enter the PIN on Command to save waypoints or set the home position.'), h('div.row', clear)];
+    }
     const name = h('input', { placeholder: 'WAYPOINT NAME', maxlength: 40 });
-    const markPanel = mark ? h('div.pb',
-      kv('LAT / LON', fmt(mark)), kv('DMS', toDMS(mark.lat, mark.lon)), kv('MGRS', toMGRS(mark.lat, mark.lon, 4) || 'POLAR'),
-      kv('FROM HOME', fromHome(mark)),
+    let forPlan = null;
+    if (pick) {
+      const label = pick.kind === 'meeting' ? `USE AS MEETING PLACE: ${pick.label}` : 'ADD TO THE ROUTE';
+      forPlan = h('div.row', { style: 'margin-top:10px' }, h('button.btn.primary', { type: 'button', onclick: () => usePick(name.value.trim()) }, label));
+    }
+    return [
+      forPlan,
       h('form', { style: 'margin-top:10px', onsubmit: async (e) => {
         e.preventDefault();
         try {
@@ -335,9 +400,18 @@ export async function render(root) {
         h('button.btn', { onclick: async () => {
           try { await saveSettings({ lat: +mark.lat.toFixed(6), lon: +mark.lon.toFixed(6) }); toast('HOME POSITION SET'); mark = null; paintSide(); draw(); } catch (error) { toast(error.message, true); }
         } }, 'SET AS HOME'),
-        h('button.btn.ghost', { onclick: () => { mark = null; paintSide(); draw(); } }, 'CLEAR')))
+        clear),
+    ];
+  }
+
+  function paintSide() {
+    const markPanel = mark ? h('div.pb',
+      kv('LAT / LON', fmt(mark)), kv('DMS', toDMS(mark.lat, mark.lon)), kv('MGRS', toMGRS(mark.lat, mark.lon, 4) || 'POLAR'),
+      kv('FROM HOME', fromHome(mark)),
+      markActions())
       : h('div.pb', h('div.empty', 'NO POINT SELECTED'), h('p.hint', 'Type coordinates above or click the map to mark a point, then save it as a waypoint or set it as your home position.'));
 
+    const noWaypoints = isGuest() ? 'WAYPOINTS NEED THE PIN' : 'NO WAYPOINTS';
     const list = waypoints.length ? h('div.scroll-x', h('table.t', h('tbody', waypoints.map((w) => h('tr',
       h('td', h('div', String(w.name).toUpperCase()), h('div.hint', fromHome(w))),
       h('td.num', h('div.row', { style: 'justify-content:flex-end;flex-wrap:nowrap' },
@@ -345,16 +419,30 @@ export async function render(root) {
         h('button.btn.sm.danger', { title: 'Delete waypoint', onclick: async () => {
           try { await api(`/api/db/waypoints/${w.id}`, { method: 'DELETE' }); waypoints = waypoints.filter((x) => x.id !== w.id); paintSide(); draw(); } catch (error) { toast(error.message, true); }
         } }, 'DEL'))))))))
-      : h('div.empty', 'NO WAYPOINTS');
+      : h('div.empty', noWaypoints);
+    const tools = !isGuest() && waypoints.length ? h('div.pb', h('div.row',
+      h('button.btn.ghost', { type: 'button', onclick: exportGpx }, 'EXPORT GPX'), printButton(printWaypoints))) : null;
 
     side.replaceChildren(
       entry,
       h('div', { style: 'height:14px' }),
       panel('SELECTED POINT', 'MRK', markPanel),
       h('div', { style: 'height:14px' }),
-      panel('WAYPOINTS', String(waypoints.length).padStart(2, '0'), h('div.pb.flush', list)),
+      panel('WAYPOINTS', String(waypoints.length).padStart(2, '0'), h('div', h('div.pb.flush', list), tools)),
       h('div', { style: 'height:14px' }),
       mapsBox);
+  }
+
+  function exportGpx() {
+    const routes = (planDoc?.routes || []).map((r) => ({ name: r.name, points: routeLegs(r, waypoints).points }));
+    download(`shelter-waypoints-${today()}.gpx`, gpx(waypoints, routes), 'application/gpx+xml');
+  }
+
+  function printWaypoints() {
+    printDoc('WAYPOINTS',
+      h('table.t', h('thead', h('tr', ['NAME', 'LAT, LON', 'MGRS', 'FROM HOME', 'NOTE'].map((x) => h('th', x)))),
+        h('tbody', waypoints.map((w) => h('tr', h('td', w.name), h('td', `${(+w.lat).toFixed(5)}, ${(+w.lon).toFixed(5)}`), h('td', toMGRS(w.lat, w.lon, 5) || '—'), h('td', fromHome(w)), h('td', w.note || ''))))),
+      h('p.hint', 'Bearings are true, not magnetic.'));
   }
 
   // interaction: one pointer drags, two pointers pinch-zoom
@@ -415,7 +503,13 @@ export async function render(root) {
   ro.observe(box);
   window.addEventListener('themechange', draw);
 
-  root.append(viewHeader('04', 'MAP', 'Chart stored on this node. Drag to pan, scroll or pinch to zoom, click to mark.'));
+  root.append(viewHeader(code, 'MAP', 'Chart stored on this node. Drag to pan, scroll or pinch to zoom, click to mark.'));
+  if (pick) {
+    root.append(h('div.banner', h('b', 'PLAN'), pick.kind === 'meeting'
+      ? `Click the map to choose the meeting place ${pick.label.toLowerCase()}, then use the button under Selected point. `
+      : 'Click the map to add points to the route, one at a time. ',
+    h('a', { href: '#/plan/places' }, 'Back to the plan')));
+  }
   if (!land) root.append(h('div.banner', h('b', 'NOTICE'), 'World outline file missing (public/data/world-110m.json). Street maps, grid and waypoints still work.'));
   if (!mapInfo.archives.length) root.append(h('div.banner', h('b', 'NO STREET MAP'), 'Only the world outline is stored. While you have a link, zoom to your area and use DOWNLOAD VISIBLE AREA under Offline maps to keep its roads and paths on this node.'));
   root.append(

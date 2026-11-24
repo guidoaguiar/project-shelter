@@ -1,11 +1,15 @@
 // Shell: routing, top bar telemetry, display modes.
-import { h, api, state, onStatus, refreshStatus, home, toast } from './lib/core.js';
+import { h, api, state, onStatus, refreshStatus, home, toast, isGuest } from './lib/core.js';
 import { toMGRS } from './lib/geo.js';
 
 const MODULES = [
-  ['command', 'COMMAND'], ['manual', 'MANUAL'], ['advisor', 'ADVISOR'], ['map', 'MAP'],
+  ['command', 'COMMAND'], ['plan', 'PLAN'], ['manual', 'MANUAL'], ['advisor', 'ADVISOR'], ['map', 'MAP'],
   ['tools', 'TOOLS'], ['log', 'LOG'], ['stores', 'STORES'], ['depot', 'DEPOT'],
 ];
+/** A module's two-digit number, from its place in the rail. */
+const codeOf = (id) => String(MODULES.findIndex(([m]) => m === id) + 1).padStart(2, '0');
+// Modules that hold household data, which guests (devices without the PIN) cannot see.
+const HOUSEHOLD = new Set(['plan', 'log', 'stores']);
 const THEMES = ['dark', 'night', 'day'];
 const $ = (id) => document.getElementById(id);
 const view = $('view');
@@ -43,7 +47,7 @@ async function route() {
     const mod = await import(`./views/${id}.js`);
     if (mine !== token) return;
     const root = h('div');
-    const result = await mod.render(root, decodeURIComponent(rest.join('/')));
+    const result = await mod.render(root, decodeURIComponent(rest.join('/')), { code: codeOf(id) });
     if (mine !== token) { result?.(); return; }
     view.replaceChildren(root);
     cleanup = result || null;
@@ -68,7 +72,11 @@ onStatus(() => {
   const s = state.status;
   const pos = home();
   $('callsign').textContent = state.settings?.callsign || 'FIELD NODE';
-  $('grid').textContent = pos ? (toMGRS(pos.lat, pos.lon, 4) || 'POLAR') : 'NOT SET';
+  const guest = isGuest();
+  $('guest').hidden = !guest;
+  for (const a of $('rail').children) a.classList.toggle('locked', guest && HOUSEHOLD.has(a.dataset.id));
+  if (guest) $('grid').textContent = 'LOCKED';
+  else $('grid').textContent = pos ? (toMGRS(pos.lat, pos.lon, 4) || 'POLAR') : 'NOT SET';
   if (state.lost || !s) {
     led('led-net', false); led('led-ai', false); led('led-dkr', false);
     $('status-left').textContent = 'NODE LINK LOST — RETRYING';

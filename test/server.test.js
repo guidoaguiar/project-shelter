@@ -176,3 +176,66 @@ test('unknown endpoints', async () => {
   assert.equal((await request('GET', '/api/nope')).status, 404);
   assert.equal((await request('DELETE', '/api/settings', { body: {} })).status, 404);
 });
+
+test('plan: defaults, partial updates, review, and waypoint links cleared on delete', async () => {
+  const fresh = (await request('GET', '/api/plan')).json;
+  assert.equal(fresh.reviewEveryDays, 365);
+  assert.deepEqual(fresh.meeting.home, { label: '', waypointId: null, notes: '' });
+  const w = (await request('POST', '/api/db/waypoints', { body: { name: 'Gate', lat: 1, lon: 2 } })).json;
+  const w2 = (await request('POST', '/api/db/waypoints', { body: { name: 'Bridge', lat: 1.1, lon: 2.1 } })).json;
+  let p = (await request('PUT', '/api/plan', { body: { meeting: { home: { label: 'Gate', waypointId: w.id } }, routes: [{ name: 'North', waypointIds: [w.id, w2.id] }] } })).json;
+  assert.equal(p.meeting.home.waypointId, w.id);
+  assert.equal(p.meeting.outOfTown.label, '', 'missing parts get defaults');
+  assert.match(p.routes[0].id, /^[0-9a-f-]{36}$/);
+  assert.equal((await request('PUT', '/api/plan', { body: { routes: 'nope' } })).status, 400);
+  assert.equal((await request('PUT', '/api/plan', { body: { meeting: { home: { waypointId: 'forged' } } } })).status, 400);
+  p = (await request('POST', '/api/plan/reviewed', { body: {} })).json;
+  assert.equal(p.reviewedAt, new Date().toISOString().slice(0, 10));
+  await request('DELETE', `/api/db/waypoints/${w.id}`, { body: {} });
+  p = (await request('GET', '/api/plan')).json;
+  assert.equal(p.meeting.home.waypointId, null);
+  assert.deepEqual(p.routes[0].waypointIds, [w2.id]);
+});
+
+test('people, contacts and kits: validated, and stores links cleared on delete', async () => {
+  assert.equal((await request('POST', '/api/db/people', { body: { kind: 'robot', name: 'x' } })).status, 400);
+  assert.equal((await request('POST', '/api/db/contacts', { body: { role: 'family' } })).status, 400, 'a name is required');
+  const med = (await request('POST', '/api/db/stores', { body: { name: 'Insulin', category: 'MEDICAL', qty: 30, dailyUse: 3 } })).json;
+  const ana = (await request('POST', '/api/db/people', { body: { name: 'Ana', medications: [{ name: 'Insulin', storeId: med.id }] } })).json;
+  const kit = (await request('POST', '/api/db/kits', { body: { name: 'Bag', items: [{ label: 'Insulin', storeId: med.id }] } })).json;
+  assert.equal(kit.intervalDays, 180);
+  await request('DELETE', `/api/db/stores/${med.id}`, { body: {} });
+  const people = (await request('GET', '/api/db/people')).json;
+  assert.equal(people.find((x) => x.id === ana.id).medications[0].storeId, null);
+  assert.equal((await request('GET', '/api/db/kits')).json.find((x) => x.id === kit.id).items[0].storeId, null);
+  const templates = (await request('GET', '/api/kits/templates')).json;
+  assert.ok(templates.some((x) => x.id === 'ready-basic'));
+});
+
+test('backup download and restore (dry run, then merge) from the host', async () => {
+  const note = (await request('POST', '/api/db/notes', { body: { title: 'backed up' } })).json;
+  const dl = await request('GET', '/api/backup');
+  assert.match(dl.headers['content-disposition'], /attachment; filename="shelter-.+\.json"/);
+  assert.equal(dl.json.format, 'shelter-backup');
+  assert.ok(dl.json.collections.notes.some((n) => n.id === note.id));
+  assert.ok((await request('GET', '/api/settings')).json.lastBackup);
+  await request('DELETE', `/api/db/notes/${note.id}`, { body: {} });
+  const dry = (await request('POST', '/api/restore', { body: { backup: dl.json, mode: 'merge', dryRun: true } })).json;
+  assert.equal(dry.report.collections.notes.add, 1);
+  assert.ok(!(await request('GET', '/api/db/notes')).json.some((n) => n.id === note.id), 'dry run changed nothing');
+  const done = (await request('POST', '/api/restore', { body: { backup: dl.json, mode: 'merge', dryRun: false } })).json;
+  assert.match(done.snapshot, /^pre-restore-/);
+  assert.ok((await request('GET', '/api/db/notes')).json.some((n) => n.id === note.id));
+  const snaps = (await request('GET', '/api/snapshots')).json;
+  assert.ok(snaps.some((s) => s.name === done.snapshot));
+  assert.equal((await request('GET', `/api/snapshots/${done.snapshot}`)).status, 200);
+  assert.equal((await request('GET', '/api/snapshots/..%2Fsettings.json')).status, 404);
+  assert.equal((await request('POST', '/api/restore', { body: { backup: { format: 'other' }, mode: 'merge' } })).status, 400);
+});
+
+test('manual sections print whole, and the new content is there', async () => {
+  const water = await request('GET', '/api/manual/section/WATER');
+  assert.equal(water.status, 200);
+  assert.ok(water.json.length > 1 && water.json.every((a) => a.category === 'WATER' && a.body));
+  assert.equal((await request('GET', '/api/manual/section/NOPE')).status, 404);
+});

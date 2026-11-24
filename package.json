@@ -1,6 +1,6 @@
 {
   "name": "shelter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Offline-first survival knowledge node: field manual, local AI advisor, maps, field tools, logs, stores and a container depot.",
   "type": "module",
   "private": true,

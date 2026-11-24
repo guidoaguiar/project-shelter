@@ -16,6 +16,17 @@ Thanks for helping. Shelter is meant to be useful when nothing else is available
 - Medical and water safety content needs a source and a reviewer before it is merged.
 - Keep entries practical: steps, quantities and warnings over background.
 
+### First aid cards and other medical content
+
+First aid cards live in `content/manual/first-aid-cards.md` and carry the tag `card`. Each one follows the same format, so it fits on half a printed page and reads the same way under stress:
+
+1. The first paragraph starts with **"Call emergency services if you can."**
+2. At most 8 numbered steps.
+3. A **Do not** list, then a **Get help urgently if** list.
+4. A `Source:` or `Sources:` line naming where the guidance comes from.
+
+The test suite checks this format. Medical content must come from public domain or openly licensed sources (US government agencies such as MedlinePlus, CDC and Ready.gov, NHS content under the Open Government Licence, or the US Army field manuals), and must not invent doses or quantities. A pull request that changes medical content needs a review from someone with current first aid training.
+
 ## Code
 
 - Shelter has no runtime dependencies and no build step. Keep it that way: no npm packages in the app, no bundlers, and no external assets loaded at runtime.

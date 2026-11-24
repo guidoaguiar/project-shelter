@@ -126,3 +126,48 @@ Numbers: say each digit separately. Nine is spoken "niner", five as "fife", thre
 - **Roger:** received and understood.
 - **Say again:** repeat your last message.
 - **Wilco:** will comply.
+
+# Emergency Radio Frequencies
+tags: radio, frequencies, emergency, noaa, weather radio, frs, gmrs, pmr446, cb, amateur, ham, meshtastic, calling frequency
+
+Where to listen, and where others are likely to be listening, when phones are down. Most of these channels are licence-free for listening; transmitting rules depend on the band and your country.
+
+## Listen for warnings
+
+| Service | Frequencies | Where | Licence |
+|---|---|---|---|
+| NOAA Weather Radio / Weatheradio Canada | 162.400, 162.425, 162.450, 162.475, 162.500, 162.525, 162.550 MHz | US, Canada | Receive only |
+
+A weather radio with alert tones wakes you for warnings. Coverage reaches roughly 60 km (40 miles) from each transmitter.
+
+## Talk nearby (handheld radios)
+
+| Service | Channels and frequencies | Where | Licence |
+|---|---|---|---|
+| FRS / GMRS, channels 1-7 | 462.5625 to 462.7125 MHz, 25 kHz apart | US | FRS: none. GMRS: licence |
+| FRS / GMRS, channels 8-14 | 467.5625 to 467.7125 MHz, 0.5 W only | US | None |
+| GMRS, channels 15-22 | 462.550 to 462.725 MHz | US | GMRS licence |
+| PMR446, channels 1-16 | 446.00625 to 446.19375 MHz, 12.5 kHz apart, 0.5 W | Europe and many other countries | None |
+| CB channel 9 | 27.065 MHz | US: emergencies and traveller assistance only | None |
+| CB channel 19 | 27.185 MHz | US: road and truckers' channel | None |
+
+Channel numbers differ between radio brands, so agree on the **frequency**, not just the number, with your household. Range is usually 1 to 3 km between handhelds, more from high ground.
+
+## Amateur (ham) radio calling frequencies
+
+| Band | Frequency | Where |
+|---|---|---|
+| 2 m FM | 146.520 MHz | US and Canada national simplex calling frequency |
+| 70 cm FM | 446.000 MHz | US national simplex calling frequency |
+| 2 m FM | 145.500 MHz | IARU Region 1 (Europe, Africa, Middle East) |
+| 70 cm FM | 433.500 MHz | IARU Region 1 |
+
+Transmitting on amateur bands needs a licence. Many countries' rules let anyone use any means to call for help when life is in immediate danger and nothing else works: check yours before you rely on it. Check your national band plan for Region 1 use.
+
+## Meshtastic (LoRa text mesh)
+
+The default **LongFast** channel uses 906.875 MHz in the US region (slot 20) and 869.525 MHz in the EU_868 region. Nodes on the same region and channel relay each other's messages, without any phone network.
+
+> **NOTE** Frequencies and rules change. Check a current official source for your country, and test your radios with your household before an emergency.
+
+Sources: National Weather Service, NOAA Weather Radio (public domain); FCC rules, 47 CFR Part 95 (FRS, GMRS and CB; public domain); ETSI / CEPT PMR446 decisions; ARRL and IARU Region 1 band plans; Meshtastic documentation, Radio Settings.

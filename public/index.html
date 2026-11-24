@@ -20,12 +20,14 @@
         <div class="tele"><span class="k">ZULU</span><span class="v" id="clock-z">--:--:--Z</span></div>
         <div class="tele opt"><span class="k">LOCAL</span><span class="v" id="clock-l">--:--:--</span></div>
         <div class="tele opt"><span class="k">GRID</span><span class="v" id="grid">NOT SET</span></div>
+        <span class="tag guest" id="guest" hidden title="This device has not entered the PIN: household data is hidden">GUEST</span>
         <div class="tele leds">
           <span class="led" id="led-net" title="Uplink"><i></i>NET</span>
           <span class="led" id="led-ai" title="Model link"><i></i>AI</span>
           <span class="led" id="led-dkr" title="Docker"><i></i>DKR</span>
         </div>
       </div>
+      <a class="btn firstaid" id="firstaid" href="#/manual/first-aid" title="First aid cards">FIRST AID</a>
       <button class="btn ghost" id="theme" title="Cycle display mode: dark, night vision, daylight">DARK</button>
     </header>
     <nav class="rail" id="rail" aria-label="Modules"></nav>
@@ -36,6 +38,7 @@
     </footer>
   </div>
   <div id="toast" role="status" aria-live="polite"></div>
+  <div id="print" hidden></div>
   <script type="module" src="/js/app.js"></script>
 </body>
 </html>

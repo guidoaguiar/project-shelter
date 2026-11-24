@@ -6,11 +6,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { Manual } from './server/manual.js';
-import { Collection, Settings } from './server/store.js';
+import { Collection, Settings, Doc } from './server/store.js';
 import { systemStatus } from './server/system.js';
 import { aiStatus, streamChat, buildPrompt } from './server/ai.js';
 import { Depot } from './server/depot.js';
 import { Maps, MAX_TILES, decompress } from './server/maps.js';
+import { Sessions, Limiter, verifyPin, sessionToken, sessionCookie } from './server/access.js';
+import { loadKitTemplates } from './server/kits.js';
+import { buildBackup, restoreBackup, checkBackup, Snapshots } from './server/backup.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -28,10 +31,20 @@ const REMOTE_ADMIN = process.env.SHELTER_REMOTE_ADMIN === '1';
 // but requests arrive from the Docker gateway address rather than 127.0.0.1.
 const BEHIND_LOCAL_PUBLISH = LOOPBACK_ONLY && !isLoopbackHost(HOST);
 
+const COLLECTIONS = ['notes', 'stores', 'waypoints', 'people', 'contacts', 'kits'];
+const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+
 fs.mkdirSync(DATA, { recursive: true });
+// A data folder with no settings or records is a new install; that decides the default LAN write policy.
+const fresh = !['settings.json', 'plan.json', ...COLLECTIONS.map((n) => `${n}.json`)].some((f) => fs.existsSync(path.join(DATA, f)));
 const manual = new Manual(path.join(ROOT, 'content', 'manual'));
-const settings = new Settings(path.join(DATA, 'settings.json'));
-const collections = Object.fromEntries(['notes', 'stores', 'waypoints'].map((n) => [n, new Collection(path.join(DATA, `${n}.json`))]));
+const settings = new Settings(path.join(DATA, 'settings.json'), { fresh });
+const collections = Object.fromEntries(COLLECTIONS.map((n) => [n, new Collection(path.join(DATA, `${n}.json`), { schema: n })]));
+const plan = new Doc(path.join(DATA, 'plan.json'), 'plan');
+const kitTemplates = loadKitTemplates(path.join(ROOT, 'config'));
+const snapshots = new Snapshots(path.join(DATA, 'backups'));
+const sessions = new Sessions();
+const pinAttempts = new Limiter();
 const maps = new Maps(path.join(DATA, 'maps'));
 const depot = new Depot(path.join(ROOT, 'config', 'depot.json'), DATA, LOOPBACK_ONLY ? '127.0.0.1' : '0.0.0.0', {
   // When Shelter runs in a container, Docker resolves bind mounts on the host, so it needs host paths.
@@ -59,18 +72,30 @@ const isLoopback = (req) => {
 };
 const canAdmin = (req) => isLoopback(req) || REMOTE_ADMIN || BEHIND_LOCAL_PUBLISH;
 
-function send(res, status, body) {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...SECURITY });
+/**
+ * What this client may do. host: everything (canAdmin). member: read and change household data.
+ * guest: the manual, map tiles, tools and advisor only. See docs/MUST-HAVE-SPEC.md, section 1.
+ */
+function role(req) {
+  if (canAdmin(req)) return 'host';
+  const { lanWrites, pinHash } = settings.value.access;
+  if (lanWrites === 'open') return 'member';
+  if (lanWrites === 'pin' && pinHash && sessions.valid(sessionToken(req))) return 'member';
+  return 'guest';
+}
+
+function send(res, status, body, headers = {}) {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...SECURITY, ...headers });
   res.end(JSON.stringify(body));
 }
 
-function readBody(req) {
+function readBody(req, limit = 2 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
     req.on('data', (c) => {
       size += c.length;
-      if (size > 2 * 1024 * 1024) { reject(fail(413, 'payload too large')); req.destroy(); } else chunks.push(c);
+      if (size > limit) { reject(fail(413, 'payload too large')); req.destroy(); } else chunks.push(c);
     });
     req.on('end', () => {
       if (!chunks.length) return resolve({});
@@ -100,6 +125,78 @@ async function bodyWithoutId(req) {
 function requireAdmin(req, message) {
   if (!canAdmin(req)) throw fail(403, message);
 }
+function requireMember(req) {
+  if (role(req) === 'guest') throw fail(403, 'enter the PIN on Command to see and change household data');
+}
+/** The client address used to count wrong PIN attempts. */
+const clientKey = (req) => (req.socket.remoteAddress || '').replace(MAPPED_V4, '');
+
+async function startSession(req, res) {
+  const { pin } = await readBody(req);
+  const key = clientKey(req);
+  if (pinAttempts.blocked(key)) throw fail(429, 'too many wrong PINs: wait 10 minutes');
+  const { lanWrites, pinHash } = settings.value.access;
+  if (lanWrites !== 'pin' || !pinHash) throw fail(400, 'no PIN is set on this node');
+  if (!verifyPin(String(pin ?? ''), pinHash)) { pinAttempts.fail(key); throw fail(403, 'wrong PIN'); }
+  pinAttempts.reset(key);
+  send(res, 200, { ok: true }, { 'set-cookie': sessionCookie(sessions.create()) });
+}
+
+const BACKUP_ADMIN = 'backups are only available on the host machine';
+
+/** After a record is deleted, clears links to it: waypoints from the plan, stores items from kits and medications. */
+function dropReferences(name, id) {
+  if (name === 'waypoints') {
+    const p = plan.get();
+    const meeting = Object.fromEntries(Object.entries(p.meeting).map(([k, m]) => [k, m.waypointId === id ? { ...m, waypointId: null } : m]));
+    const routes = p.routes.map((r) => ({ ...r, waypointIds: r.waypointIds.filter((w) => w !== id) }));
+    if (JSON.stringify({ meeting, routes }) !== JSON.stringify({ meeting: p.meeting, routes: p.routes })) plan.update({ meeting, routes });
+  }
+  if (name === 'stores') {
+    const unlink = (list) => list.map((x) => (x.storeId === id ? { ...x, storeId: null } : x));
+    collections.kits.rewrite((k) => (k.items.some((x) => x.storeId === id) ? { ...k, items: unlink(k.items) } : k));
+    collections.people.rewrite((p) => (p.medications?.some((x) => x.storeId === id) ? { ...p, medications: unlink(p.medications) } : p));
+  }
+}
+
+async function currentBackup() {
+  const archives = await maps.scan().catch(() => []);
+  return buildBackup({ settings, collections, plan, maps: archives, appVersion: VERSION });
+}
+
+async function downloadBackup(req, res) {
+  requireAdmin(req, BACKUP_ADMIN);
+  const backup = await currentBackup();
+  settings.markBackup();
+  const day = backup.created.slice(0, 16).replaceAll(/[-:]/g, '').replace('T', '-');
+  const name = `shelter-${backup.node.callsign.toLowerCase().replaceAll(/[^a-z0-9-]/g, '')}-${day}.json`;
+  send(res, 200, backup, { 'content-disposition': `attachment; filename="${name}"` });
+}
+
+/** Restores a backup: { backup, mode: 'merge' | 'replace', dryRun }. A real restore first saves a pre-restore snapshot. */
+async function restore(req, res) {
+  requireAdmin(req, BACKUP_ADMIN);
+  const { backup, mode, dryRun = true } = await readBody(req, 50 * 1024 * 1024);
+  checkBackup(backup);
+  let snapshot = null;
+  if (!dryRun) snapshot = snapshots.save('pre-restore', await currentBackup());
+  const report = restoreBackup(backup, { mode, dryRun: !!dryRun }, { settings, collections, plan });
+  send(res, 200, { dryRun: !!dryRun, mode, report, snapshot });
+}
+
+/** Today's automatic snapshot; runs at start and every six hours (a new day gets a new one). */
+async function dailySnapshot() {
+  try { snapshots.daily(await currentBackup()); } catch (error) { console.error(`snapshot failed: ${error.message}`); }
+}
+
+async function putSettings(req, res) {
+  requireMember(req);
+  const who = role(req);
+  const before = settings.value.access.pinHash;
+  const value = settings.update(await readBody(req), who);
+  if (settings.value.access.pinHash !== before) sessions.clear(); // a new or removed PIN signs every device out
+  send(res, 200, value);
+}
 const MAP_ADMIN = 'map downloads are only available from the host machine';
 
 async function status(req, res) {
@@ -110,7 +207,8 @@ async function status(req, res) {
     ai: { online: ai.online, models: ai.models, error: ai.error, provider: settings.value.ai.provider, model: settings.value.ai.model || ai.models[0] || '' },
     docker,
     manual: { articles: manual.articles.length, categories: cats.size },
-    server: { port: PORT, lanMode: !LOOPBACK_ONLY, version: '0.1.0' },
+    server: { port: PORT, lanMode: !LOOPBACK_ONLY, version: VERSION },
+    access: { role: role(req), lanWrites: settings.value.access.lanWrites, pinSet: !!settings.value.access.pinHash },
     time: new Date().toISOString(),
   });
 }
@@ -121,7 +219,7 @@ async function hash(req, res) {
   send(res, 200, { hash: crypto.createHash(algo).update(String(text), 'utf8').digest('hex') });
 }
 
-const DB = '^/api/db/(notes|stores|waypoints)';
+const DB = `^/api/db/(${COLLECTIONS.join('|')})`;
 const DB_ITEM = new RegExp(`${DB}/([0-9a-f-]{36})$`);
 
 /**
@@ -130,25 +228,62 @@ const DB_ITEM = new RegExp(`${DB}/([0-9a-f-]{36})$`);
  */
 const ROUTES = [
   ['GET', '/api/status', ({ req, res }) => status(req, res)],
-  ['GET', '/api/settings', ({ res }) => send(res, 200, settings.public())],
-  ['PUT', '/api/settings', async ({ req, res }) => send(res, 200, settings.update(await readBody(req)))],
+  ['GET', '/api/settings', ({ req, res }) => send(res, 200, settings.public(role(req)))],
+  ['PUT', '/api/settings', ({ req, res }) => putSettings(req, res)],
+  ['POST', '/api/session', ({ req, res }) => startSession(req, res)],
+  ['DELETE', '/api/session', ({ req, res }) => {
+    sessions.revoke(sessionToken(req));
+    send(res, 200, { ok: true }, { 'set-cookie': sessionCookie('') });
+  }],
 
   ['GET', '/api/manual', ({ res }) => send(res, 200, manual.index())],
   ['GET', '/api/search', ({ res, url }) => send(res, 200, manual.search(url.searchParams.get('q') || '', 12))],
+  ['GET', /^\/api\/manual\/section\/([^/]{1,120})$/, ({ res }, category) => {
+    let name;
+    try { name = decodeURIComponent(category); } catch { throw fail(400, 'bad section'); }
+    const entries = manual.section(name);
+    if (!entries.length) throw fail(404, 'no such section');
+    send(res, 200, entries);
+  }],
   ['GET', /^\/api\/manual\/([a-z0-9-]{1,200})$/, ({ res }, id) => {
     const a = manual.get(id);
     if (!a) throw fail(404, 'no such entry');
     send(res, 200, a);
   }],
 
-  ['GET', new RegExp(`${DB}$`), ({ res }, name) => send(res, 200, collections[name].all())],
-  ['POST', new RegExp(`${DB}$`), async ({ req, res }, name) => send(res, 201, collections[name].upsert(await bodyWithoutId(req)))],
+  // Household data: members and the host only, for reading as well as writing.
+  ['GET', new RegExp(`${DB}$`), ({ req, res }, name) => { requireMember(req); send(res, 200, collections[name].all()); }],
+  ['POST', new RegExp(`${DB}$`), async ({ req, res }, name) => { requireMember(req); send(res, 201, collections[name].upsert(await bodyWithoutId(req))); }],
   ['PUT', DB_ITEM, async ({ req, res }, name, id) => {
+    requireMember(req);
     const item = collections[name].upsert(await bodyWithoutId(req), id);
     if (!item) throw fail(404, 'not found');
     send(res, 200, item);
   }],
-  ['DELETE', DB_ITEM, ({ res }, name, id) => send(res, 200, { ok: collections[name].remove(id) })],
+  ['DELETE', DB_ITEM, ({ req, res }, name, id) => {
+    requireMember(req);
+    const ok = collections[name].remove(id);
+    if (ok) dropReferences(name, id);
+    send(res, 200, { ok });
+  }],
+
+  ['GET', '/api/plan', ({ req, res }) => { requireMember(req); send(res, 200, plan.get()); }],
+  ['PUT', '/api/plan', async ({ req, res }) => { requireMember(req); send(res, 200, plan.update(await readBody(req))); }],
+  ['POST', '/api/plan/reviewed', ({ req, res }) => {
+    requireMember(req);
+    send(res, 200, plan.update({ reviewedAt: new Date().toISOString().slice(0, 10) }));
+  }],
+  ['GET', '/api/kits/templates', ({ res }) => send(res, 200, kitTemplates)],
+
+  ['GET', '/api/backup', ({ req, res }) => downloadBackup(req, res)],
+  ['POST', '/api/restore', ({ req, res }) => restore(req, res)],
+  ['GET', '/api/snapshots', ({ req, res }) => { requireAdmin(req, BACKUP_ADMIN); send(res, 200, snapshots.list()); }],
+  ['GET', /^\/api\/snapshots\/([A-Za-z0-9-]+\.json)$/, ({ req, res }, name) => {
+    requireAdmin(req, BACKUP_ADMIN);
+    const file = snapshots.file(name);
+    if (!file) throw fail(404, 'no such snapshot');
+    sendFile(req, res, file, { 'content-disposition': `attachment; filename="shelter-${name}"` });
+  }],
 
   ['POST', '/api/hash', ({ req, res }) => hash(req, res)],
   ['POST', '/api/chat', ({ req, res }) => chat(req, res)],
@@ -242,12 +377,12 @@ async function mapTile(req, res, z, x, y) {
   res.end(body);
 }
 
-function sendFile(req, res, file) {
+function sendFile(req, res, file, extra = {}) {
   fs.stat(file, (err, st) => {
     if (err || !st.isFile()) return send(res, 404, { error: 'not found' });
     res.writeHead(200, {
       'content-type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
-      'content-length': st.size, 'cache-control': 'no-cache', ...SECURITY,
+      'content-length': st.size, 'cache-control': 'no-cache', ...SECURITY, ...extra,
     });
     if (req.method === 'HEAD') return res.end();
     fs.createReadStream(file).pipe(res);
@@ -290,6 +425,8 @@ server.on('error', (e) => {
 });
 
 server.listen(PORT, HOST, () => {
+  dailySnapshot().catch(() => {}); // logs its own errors
+  setInterval(dailySnapshot, 6 * 3600 * 1000).unref();
   console.log(`\n  SHELTER // field node online`);
   // In a bridged container PORT is the internal one; SHELTER_PORT is what the host publishes.
   const shown = process.env.SHELTER_PORT || PORT;

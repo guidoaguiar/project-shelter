@@ -1,5 +1,5 @@
 // 02 MANUAL — offline reference manual with ranked search.
-import { h, api, viewHeader, panel } from '../lib/core.js';
+import { h, api, viewHeader, panel, toast, printDoc, printButton } from '../lib/core.js';
 import { md } from '../lib/md.js';
 
 let lastQuery = '';
@@ -15,6 +15,37 @@ function sectionsOf(index) {
     groups.get(key).push(a);
   }
   return sections;
+}
+
+/** One entry laid out for paper. */
+const printable = (a) => h('section.page', h('h1', a.title), h('div.prose', { html: md(a.body, { imgBase: a.imgBase }) }));
+
+async function printSection(category) {
+  try {
+    const entries = await api(`/api/manual/section/${encodeURIComponent(category)}`);
+    printDoc(`FIELD MANUAL: ${category}`, entries.map(printable));
+  } catch (error) { toast(error.message, true); }
+}
+
+/** First aid cards: entries tagged "card", printed compactly. */
+async function printCards(cards) {
+  try {
+    const entries = await Promise.all(cards.map((c) => api(`/api/manual/${c.id}`)));
+    printDoc('FIRST AID CARDS', h('div.print-cards', entries.map((a) => h('section.print-card', h('h2', a.title), h('div.prose', { html: md(a.body, { imgBase: a.imgBase }) })))));
+  } catch (error) { toast(error.message, true); }
+}
+
+/** The first aid page: large links to each card, for use under stress. */
+function firstAid(index, code) {
+  const cards = index.filter((a) => a.tags?.includes('card'));
+  return [
+    viewHeader(code, 'FIRST AID', 'Call emergency services first if you can. These cards are a reminder, not training.',
+      cards.length ? printButton(() => printCards(cards), 'PRINT CARDS') : null),
+    cards.length
+      ? h('div.grid', cards.map((a) => h('a.colcard.aid.s4', { href: `#/manual/${a.id}` }, h('div.name', a.title), h('div.desc', a.summary))))
+      : h('div.empty', 'NO FIRST AID CARDS IN THE MANUAL'),
+    h('p.hint', { style: 'margin-top:14px' }, 'Practise with a first aid course before you need this. Cards are in the Manual under Medical, First Aid Cards.'),
+  ];
 }
 
 const entryCount = (groups) => [...groups.values()].reduce((n, g) => n + g.length, 0);
@@ -40,8 +71,9 @@ function overview(index, sections) {
   ];
 }
 
-export async function render(root, arg) {
+export async function render(root, arg, { code } = {}) {
   const index = await api('/api/manual');
+  if (arg === 'first-aid') { root.append(...firstAid(index, code)); return; }
   let currentId = '';
   if (arg.startsWith('?q=')) lastQuery = arg.slice(3);
   else currentId = arg;
@@ -89,7 +121,10 @@ export async function render(root, arg) {
     const nav = (n, label) => (n ? h('a.btn', { href: `#/manual/${n.id}`, style: 'text-decoration:none', title: n.title }, label) : h('span'));
     reader.replaceChildren(
       h('div.article-head',
-        h('div.row', h('span.tag.acc', article.category), article.group ? h('span.tag', article.group) : null),
+        h('div.row', { style: 'justify-content:space-between' },
+          h('div.row', h('span.tag.acc', article.category), article.group ? h('span.tag', article.group) : null),
+          h('div.row', printButton(() => printDoc(`FIELD MANUAL: ${article.category}`, printable(article))),
+            printButton(() => printSection(article.category), 'PRINT SECTION'))),
         h('h1', article.title)),
       h('div.prose', { html: md(article.body, { imgBase: article.imgBase }) }),
       h('div.article-foot', h('div.row', { style: 'justify-content:space-between' }, nav(article.prev, '← PREVIOUS'), nav(article.next, 'NEXT →'))));
@@ -100,7 +135,7 @@ export async function render(root, arg) {
   }
 
   root.append(
-    viewHeader('02', 'MANUAL', 'Survival and self-reliance reference. Fully offline.'),
+    viewHeader(code, 'MANUAL', 'Survival and self-reliance reference. Fully offline.'),
     h('div.split',
       h('div.sticky', panel('INDEX', `${index.length} ENTRIES`, h('div', h('div.pb', search), list))),
       panel(article ? 'ENTRY' : 'OVERVIEW', 'MAN', reader)));

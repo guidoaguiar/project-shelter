@@ -177,6 +177,12 @@ export class Manual {
     };
   }
 
+  /** Every entry of one section (category), in manual order, with bodies: for printing a section. */
+  section(category) {
+    this.reload();
+    return this.articles.filter((a) => a.category === category).map((a) => this.get(a.id));
+  }
+
   /** Folder holding a content subfolder's figures, or null. */
   imageDir(dir) {
     this.reload();

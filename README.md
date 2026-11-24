@@ -21,11 +21,13 @@ A field manual, a local AI advisor, an offline map and field tools that run on h
 
 ## Why Shelter
 
-- **249-entry survival manual**, with 167 figures and ranked full-text search: water, fire, shelter, food, navigation, medical, signals and more.
+- **270-entry survival manual**, with 167 figures and ranked full-text search: water, fire, shelter, food, navigation, medical, signals, household emergencies, and first aid cards one tap from every screen.
+- **A household emergency plan:** people and pets with their medical needs, contacts, three meeting places, evacuation routes on the map, utility shut-offs, and a printable wallet card.
 - **A local AI advisor that cites its sources.** It answers from the manual and links the entries it used. With no model installed, it still returns the closest entries.
 - **An offline street map.** While you have a link, download your area once: roads, footpaths, tracks, rivers, buildings, place names, and water points, clinics, fuel and shelters from OpenStreetMap. After that it works with no internet, with waypoints, a scale bar, and range and bearing from home.
 - **Field tools:** UTM and MGRS conversion, sun and moon times, Morse with audio, water disinfection dosing, pace counts.
-- **Supply tracking** that tells you how many days of food and water you have and warns before items expire.
+- **Supply tracking** that tells you how many days of food, water and medication you have, warns before items expire or run low, and keeps kit checklists (Ready.gov templates) on a schedule.
+- **Backups and paper copies:** one-click backup and restore, daily automatic snapshots, CSV, Markdown and GPX exports, and print views for the plan, kits, supplies and manual.
 - **A one-click Depot** for 19 more offline services: Kiwix (offline Wikipedia), Kolibri, Calibre-Web, Open WebUI and others.
 - **Night-vision mode:** a red-only display that preserves your dark adaptation.
 - **Small and hackable:** one container, a zero-dependency Node server, no build step, and the whole manual is Markdown you can edit.
@@ -46,7 +48,7 @@ Shelter was inspired by [Project N.O.M.A.D.](https://github.com/crosstalk-soluti
 - **Runs where you already are.** One-line installers for Linux, macOS and Windows, or `node server.js` with no dependencies at all.
 - **Plain files.** Your notes, supplies and waypoints live in a data folder you can copy to back up. The manual is Markdown in this repository.
 
-> **Note:** The manual is a reference, not a substitute for training or professional medical care. Shelter has no login, so do not expose it to the internet.
+> **Note:** The manual is a reference, not a substitute for training or professional medical care. Shelter is made for your home network, not the internet: do not expose it to the internet.
 
 ## Install
 
@@ -62,14 +64,14 @@ Shelter runs in Docker, which also runs its local AI and the Depot services. The
 
 You need an internet connection during install. After that, Shelter works offline.
 
-Shelter has no login. Do not expose it to the internet.
+Shelter is made for your home network. Do not expose it to the internet.
 
 ### Quick install
 
 Open a terminal and paste the line for your system. The installer checks for Docker and installs it if missing, downloads Shelter and starts it. It asks a few questions; pressing Enter accepts the default:
 
 - the port (default 4077)
-- whether phones and tablets on your network may connect (default no)
+- whether phones and tablets on your network may connect (default no), and if so, a PIN they need to see your household data
 - whether to set up the local AI now (Ollama with `llama3.2:3b`, about 2.5 GB)
 
 **Linux** (Ubuntu, Debian, Raspberry Pi OS, Fedora, Arch and others):
@@ -99,9 +101,9 @@ When the installer finishes, open http://localhost:4077. Shelter starts again on
 | Program files | `/opt/shelter/app` | `~/Shelter/app` | `%USERPROFILE%\Shelter\app` |
 | Your data | `/opt/shelter/data` | `~/Shelter/data` | `%USERPROFILE%\Shelter\data` |
 
-**Update:** run the same command again. Your data, settings, added manual files and `depot.custom.json` are kept, but edits to built-in manual files are replaced. On Linux you can also run `sudo shelter update`.
+**Update:** run the same command again. Your data, settings, added manual files, `depot.custom.json` and `kits.custom.json` are kept, but edits to built-in manual files are replaced. On Linux you can also run `sudo shelter update`.
 
-**Manage (Linux and macOS):** `shelter status | logs | stop | start | restart | update | open`. On macOS the command is `~/Shelter/shelter`.
+**Manage (Linux and macOS):** `shelter status | logs | stop | start | restart | update | open | pin`. On macOS the command is `~/Shelter/shelter`.
 
 **Uninstall:** run the installer with `--uninstall` (Linux, macOS) or `-Uninstall` (Windows). It asks before deleting your data.
 
@@ -154,26 +156,41 @@ node server.js --lan    # also serve phones and tablets on your network
 
 The Depot then uses the Docker CLI on the same machine, if there is one.
 
+### Access from other devices
+
+In network mode, the computer Shelter runs on (the host) can do everything. Other devices are treated according to the access setting under **Command, Access**:
+
+| Setting | Other devices |
+|---|---|
+| **PIN** | Without the PIN they get the manual, map, tools and advisor. With it they can also see and change notes, supplies, waypoints and the home position. The default for new installs. |
+| **Read-only** | The manual, map, tools and advisor only. |
+| **Open** | Everything except model and access settings. The default for installs from before version 0.2. |
+
+Model settings, the access setting and the PIN can only be changed on the host. A PIN stops housemates and guests from reading or changing data by accident; on a plain-HTTP network it does not stop someone who can watch the traffic.
+
+To set or change the PIN from a terminal on the host: `sudo shelter pin` (Linux), `~/Shelter/shelter pin` (macOS) or `docker exec -it shelter node server/pin.js` (Windows, or any Docker install). Add `--policy open|pin|readonly`, `--remove` or `--status`. Without Docker, run `node server/pin.js` while Shelter is running.
+
 ### Platform notes
 
 - **Linux** runs Shelter with host networking, so it behaves like a native install. The Depot can tell the host machine apart from other devices, so its controls stay available on the host in network mode.
-- **macOS and Windows** run Shelter inside Docker Desktop's virtual machine. Docker Desktop hides where requests come from, so in network mode Shelter cannot tell your computer from a phone. The Depot's start/stop buttons are therefore off in network mode on these systems, unless you set `SHELTER_REMOTE_ADMIN=1`, which allows them for every device on your network. In local mode they work normally.
+- **macOS and Windows** run Shelter inside Docker Desktop's virtual machine. Docker Desktop hides where requests come from, so in network mode Shelter cannot tell your computer from a phone. The Depot's start/stop buttons, the model settings and the access settings are therefore off in network mode on these systems, even in the host's own browser, unless you set `SHELTER_REMOTE_ADMIN=1`, which allows them for every device on your network. In local mode they work normally. Your own browser enters the PIN like any other device; set and change the PIN with the `pin` command above.
 - **Windows:** Docker Desktop must use Linux containers (its default). On first network use, Windows Firewall may ask about Docker; allow it on private networks.
 
 ## Modules
 
 | # | Module | What it does |
 |---|---|---|
-| 01 | Command | Host telemetry, link status, grid position, sun and moon, supply readiness, configuration |
-| 02 | Manual | 249 entries in 14 sections, with figures and ranked full-text search. Each section opens with short essentials, followed by full chapters |
-| 03 | Advisor | Chat with a local model, grounded in the manual and citing entries. With no model it returns the closest entries instead |
-| 04 | Map | World outline everywhere, plus downloadable street maps (roads, paths, tracks, water, buildings, key points) that work offline. Waypoints, range and bearing from home |
-| 05 | Tools | Coordinate conversion (DD, DMS, UTM, MGRS), sun and moon times, Morse with audio, water disinfection dosing, pace and bearing, encoding and hashing |
-| 06 | Log | Markdown notes saved on the node |
-| 07 | Stores | Supply inventory with days of water and food, and expiry warnings |
-| 08 | Depot | Deploys 19 services as Docker containers, in six categories: knowledge (Kiwix, Kolibri, Calibre-Web, DokuWiki), AI (Ollama, Open WebUI), tools, vault, homestead and media. Each card links to where its content comes from |
+| 01 | Command | Host telemetry, link status, grid position, sun and moon, supply and plan readiness, backup and restore, access, configuration |
+| 02 | Plan | The household emergency plan: people and pets, contacts, meeting places and routes, sheltering in place and utility shut-offs, a review checklist, and printouts |
+| 03 | Manual | 270 entries in 15 sections, including household emergencies and first aid cards, with figures and ranked full-text search. Each section opens with short essentials, followed by full chapters |
+| 04 | Advisor | Chat with a local model, grounded in the manual and citing entries. With no model it returns the closest entries instead |
+| 05 | Map | World outline everywhere, plus downloadable street maps (roads, paths, tracks, water, buildings, key points) that work offline. Waypoints, plan routes and meeting places, range and bearing from home, GPX export |
+| 06 | Tools | Coordinate conversion (DD, DMS, UTM, MGRS), sun and moon times, Morse with audio, water disinfection dosing, pace and bearing, encoding and hashing |
+| 07 | Log | Markdown notes saved on the node, exportable as one Markdown file |
+| 08 | Stores | Supply inventory with days of water, food and medication, low-stock and expiry warnings, and kit checklists checked on a schedule |
+| 09 | Depot | Deploys 19 services as Docker containers, in six categories: knowledge (Kiwix, Kolibri, Calibre-Web, DokuWiki), AI (Ollama, Open WebUI), tools, vault, homestead and media. Each card links to where its content comes from |
 
-The display button in the top bar cycles three modes: dark, night vision (red only, to preserve dark adaptation) and daylight.
+The FIRST AID button in the top bar opens the first aid cards from any screen. The display button cycles three modes: dark, night vision (red only, to preserve dark adaptation) and daylight.
 
 ## Local AI
 
@@ -270,14 +287,26 @@ With Docker, set these in `.env` next to `compose.yaml` (see [.env.example](.env
 | `SHELTER_BIND` | `127.0.0.1` | `0.0.0.0` serves phones and tablets on your network |
 | `SHELTER_AI_URL` | see [Local AI](#local-ai) | Default model server address. A URL saved under Configuration takes precedence |
 | `SHELTER_NET_CHECK` | `1.1.1.1:443` | Host probed for uplink status. Set to `off` to disable |
-| `SHELTER_REMOTE_ADMIN` | `0` | Set to `1` to allow Depot control from other devices in network mode |
+| `SHELTER_REMOTE_ADMIN` | `0` | Set to `1` to treat every device as the host in network mode: Depot control, model and access settings |
 | `SHELTER_DEPOT_UID` | `1000` | Owner given to Depot service folders (`uid` or `uid:gid`, `off` to skip) |
 | `SHELTER_DEPOT_HOST_DIR` | unset | Docker Desktop on Windows: where the Docker VM sees `SHELTER_DATA_DIR/depot` |
 | `SHELTER_MAP_SOURCE` | newest Protomaps daily build | PMTiles URL that map downloads are cut from |
 
 Running from source, the server reads `PORT`, `HOST` (`127.0.0.1`, or `0.0.0.0` with `--lan`), `SHELTER_DATA` (`./data`), `SHELTER_NET_CHECK`, `SHELTER_REMOTE_ADMIN`, `SHELTER_AI_URL` and `SHELTER_MAP_SOURCE`.
 
-Back up the node by copying the data folder.
+## Backups
+
+Under **Command, Data** on the host machine:
+
+- **Download backup** saves one JSON file with your settings, notes, supplies, waypoints, household plan, people, contacts and kits. It never contains the model API key or the PIN, so it is safe to keep on a USB stick. Street maps are listed by name and area, not included: download them again, or copy `<data>/maps`.
+- **Restore** shows what a backup would change before it changes anything. *Merge* adds new records and keeps the newer copy of each one; *Replace* makes the node match the backup. Either way, a snapshot of the current data is saved first.
+- Shelter saves an **automatic snapshot** in `<data>/backups` each day the data changes, and keeps the last 14.
+
+Copying the whole data folder still works as a backup too.
+
+## Kits
+
+The kit templates in `config/kits.json` follow the Ready.gov lists. To add your own, create `config/kits.custom.json` in the same format; an entry with a matching `id` replaces the built-in one. Restart to pick up changes.
 
 ## Layout
 
