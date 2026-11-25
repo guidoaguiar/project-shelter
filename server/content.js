@@ -39,7 +39,7 @@ export function insideDir(dir, name) {
   const root = path.resolve(dir);
   const full = path.resolve(root, s);
   // basename === name rules out separators of either kind; dirname === root rules out "..".
-  if (!s || s === '.' || s === '..' || s.includes('\0') || path.basename(full) !== s || path.dirname(full) !== root) throw fail(400, 'bad file name');
+  if (!s || s === '.' || s === '..' || s.includes('\0') || /[\\/]/.test(s) || path.basename(full) !== s || path.dirname(full) !== root) throw fail(400, 'bad file name');
   return full;
 }
 
