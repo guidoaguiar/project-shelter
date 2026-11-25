@@ -1,6 +1,7 @@
 // Record schemas: what each collection may store. Validation runs on writes only, so records saved
 // before a field existed still load. Unknown fields are dropped; ids are assigned by the server.
 import crypto from 'node:crypto';
+import { ATTACHMENT_NAME, IMAGE_TYPES, MAX_BYTES, MAX_PER_NOTE } from './attachments.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -126,7 +127,18 @@ export const STORE_UNITS = ['ea', 'L', 'gal', 'kg', 'lb', 'pack', 'dose'];
 export const WAYPOINT_KINDS = ['home', 'rally', 'water', 'cache', 'shelter', 'medical', 'hazard', 'other'];
 
 export const SCHEMAS = {
-  notes: { title: str(120), body: str(200_000), tags: list(str(32), 20) },
+  notes: {
+    title: str(120), body: str(200_000), tags: list(str(32), 20),
+    // Log templates and image attachments (2.6); entries saved before these existed load unchanged.
+    template: str(40),
+    attachments: list({
+      file: rule((v, f) => {
+        if (typeof v !== 'string' || !ATTACHMENT_NAME.test(v)) throw invalid(f, 'must be an attachment file name');
+        return v;
+      }, { required: true }),
+      name: str(120), type: oneOf(Object.keys(IMAGE_TYPES)), size: int(0, MAX_BYTES),
+    }, MAX_PER_NOTE),
+  },
   stores: {
     name: str(80, true), category: oneOf(STORE_CATEGORIES, 'OTHER'), qty: num(0, 1e7), unit: oneOf(STORE_UNITS, 'ea'),
     kcal: num(0, 1e6, true), expires: date(), location: str(60), minQty: num(0, 1e7, true), dailyUse: num(0, 1e5, true), note: str(500),
@@ -156,6 +168,32 @@ SCHEMAS.kits = {
   intervalDays: withDefault(int(7, 730), 180), checkedAt: date(), checking: bool(),
 };
 
+// ----- map routes and tracks (IMPROVEMENTS 2.3) -----
+
+export const ROUTE_KINDS = ['route', 'track'];
+export const MAX_ROUTE_POINTS = 200;
+export const MAX_TRACK_POINTS = 10_000;
+
+/** Track points: a list of [lat, lon] or [lat, lon, elevation in m], stored rounded (6 decimals, 0.1 m). */
+export const coords = (max) => rule((v, f) => {
+  if (v === null || v === undefined) return [];
+  if (!Array.isArray(v)) throw invalid(f, 'must be a list');
+  if (v.length > max) throw invalid(f, `more than ${max} points`);
+  return v.map((p, i) => {
+    const ok = Array.isArray(p) && (p.length === 2 || p.length === 3) && p.every((n) => typeof n === 'number' && Number.isFinite(n));
+    if (!ok || Math.abs(p[0]) > 90 || Math.abs(p[1]) > 180 || (p.length === 3 && Math.abs(p[2]) > 20_000)) throw invalid(`${f}[${i}]`, 'must be [lat, lon] or [lat, lon, elevation]');
+    const c = [Math.round(p[0] * 1e6) / 1e6, Math.round(p[1] * 1e6) / 1e6];
+    if (p.length === 3) c.push(Math.round(p[2] * 10) / 10);
+    return c;
+  });
+}, { fallback: [] });
+
+/** A route is an ordered list of waypoints; a track is a recorded line of points (from GPX). */
+SCHEMAS.routes = {
+  name: str(60, true), kind: oneOf(ROUTE_KINDS, 'route'),
+  waypointIds: list(uuid(), MAX_ROUTE_POINTS), track: coords(MAX_TRACK_POINTS), notes: str(500),
+};
+
 const place = { label: str(80), waypointId: uuid(), notes: str(300) };
 /** The household plan: one document, not a collection. */
 SCHEMAS.plan = {
@@ -169,8 +207,32 @@ SCHEMAS.plan = {
   reviewEveryDays: withDefault(int(30, 730), 365),
 };
 
+// ----- power and situation (IMPROVEMENTS 2.1 and 2.7) -----
+
+/** A date and time (ISO 8601), or null. */
+const instant = () => rule((v, f) => {
+  if (isEmpty(v)) return null;
+  if (typeof v !== 'string' || v.length > 40 || !/^\d{4}-\d{2}-\d{2}T/.test(v) || Number.isNaN(Date.parse(v))) throw invalid(f, 'must be a date and time');
+  return v;
+}, { fallback: null });
+
+/** Power settings, kept inside settings.power: low-power mode and the power budget in Tools. */
+SCHEMAS.power = {
+  lowPower: bool(),
+  batteryWh: num(0, 1e6, true), usablePct: withDefault(num(10, 100), 80), efficiency: withDefault(num(50, 100), 90),
+  solarW: num(0, 1e5, true), sunHours: withDefault(num(0, 24), 4),
+  devices: list({ name: str(40, true), watts: num(0, 1e5), hours: num(0, 24), qty: withDefault(int(1, 999), 1) }, 40),
+};
+
+/** The household check-in: one document. Each person is marked accounted for, with the time. */
+SCHEMAS.checkin = {
+  startedAt: instant(),
+  allOk: bool(),
+  people: list({ personId: uuid(), name: str(60, true), ok: bool(), at: instant() }, 120),
+};
+
 /** Most records each collection may hold. */
-export const LIMITS = { notes: 5000, stores: 10_000, waypoints: 5000, people: 100, contacts: 500, kits: 100 };
+export const LIMITS = { notes: 5000, stores: 10_000, waypoints: 5000, people: 100, contacts: 500, kits: 100, routes: 500 };
 
 /** The stored form of input for collection name. partial: an update, where missing fields keep their values. */
 export function validate(name, input, { partial = false } = {}) {

@@ -7,13 +7,20 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { Manual } from './server/manual.js';
 import { Collection, Settings, Doc } from './server/store.js';
-import { systemStatus } from './server/system.js';
-import { aiStatus, streamChat, buildPrompt } from './server/ai.js';
+import { systemStatus, setLowPower } from './server/system.js';
+import { PowerMonitor } from './server/power.js';
+import { aiStatus, streamChat, buildPrompt, householdPrompt, isLocalModelUrl, pullModel } from './server/ai.js';
+import { EmbeddingIndex, pickEmbedModel, retrieve, isEmbedModel } from './server/retrieval.js';
+import { modelName, registrySize, estimateSize, modelFit } from './server/models.js';
+import { Attachments, MAX_BYTES as ATTACHMENT_MAX } from './server/attachments.js';
 import { Depot } from './server/depot.js';
+import { Content } from './server/content.js';
 import { Maps, MAX_TILES, decompress } from './server/maps.js';
 import { Sessions, Limiter, verifyPin, sessionToken, sessionCookie } from './server/access.js';
 import { loadKitTemplates } from './server/kits.js';
 import { buildBackup, restoreBackup, checkBackup, Snapshots } from './server/backup.js';
+import { httpsRequested, loadCert, certHosts, machineName, dualServer } from './server/https.js';
+import { shellManifest } from './server/offline.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -31,7 +38,7 @@ const REMOTE_ADMIN = process.env.SHELTER_REMOTE_ADMIN === '1';
 // but requests arrive from the Docker gateway address rather than 127.0.0.1.
 const BEHIND_LOCAL_PUBLISH = LOOPBACK_ONLY && !isLoopbackHost(HOST);
 
-const COLLECTIONS = ['notes', 'stores', 'waypoints', 'people', 'contacts', 'kits'];
+const COLLECTIONS = ['notes', 'stores', 'waypoints', 'people', 'contacts', 'kits', 'routes'];
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 
 fs.mkdirSync(DATA, { recursive: true });
@@ -41,6 +48,16 @@ const manual = new Manual(path.join(ROOT, 'content', 'manual'));
 const settings = new Settings(path.join(DATA, 'settings.json'), { fresh });
 const collections = Object.fromEntries(COLLECTIONS.map((n) => [n, new Collection(path.join(DATA, `${n}.json`), { schema: n })]));
 const plan = new Doc(path.join(DATA, 'plan.json'), 'plan');
+const checkin = new Doc(path.join(DATA, 'checkin.json'), 'checkin');
+const power = new PowerMonitor({ enabled: process.env.SHELTER_POWER_CHECK !== 'off', nut: process.env.SHELTER_NUT || '' });
+const lowPower = () => !!settings.value.power?.lowPower;
+/** Low-power mode slows the host samplers and the power reader; the advisor is turned off. */
+function applyPowerMode() {
+  setLowPower(lowPower());
+  power.start(lowPower());
+}
+const attachments = new Attachments(path.join(DATA, 'attachments'));
+const embeddings = new EmbeddingIndex(path.join(DATA, 'cache'));
 const kitTemplates = loadKitTemplates(path.join(ROOT, 'config'));
 const snapshots = new Snapshots(path.join(DATA, 'backups'));
 const sessions = new Sessions();
@@ -51,14 +68,19 @@ const depot = new Depot(path.join(ROOT, 'config', 'depot.json'), DATA, LOOPBACK_
   hostDataDir: process.env.SHELTER_HOST_DATA || '',
   bindRoot: process.env.SHELTER_DEPOT_HOST_DIR || '',
 });
+// Depot content downloads (config/content.json). Ollama models go to the configured Ollama server.
+const content = new Content(path.join(ROOT, 'config', 'content.json'), depot, {
+  ollamaUrl: () => (settings.value.ai.provider === 'ollama' ? settings.value.ai.baseUrl : 'http://127.0.0.1:11434'),
+});
+const CONTENT_ADMIN = 'content can only be downloaded or deleted from the host machine';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.ico': 'image/x-icon',
-  '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8',
+  '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8', '.webmanifest': 'application/manifest+json; charset=utf-8',
 };
 const SECURITY = {
-  'content-security-policy': "default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+  'content-security-policy': "default-src 'self'; img-src 'self' data:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
 };
@@ -151,6 +173,7 @@ function dropReferences(name, id) {
     const meeting = Object.fromEntries(Object.entries(p.meeting).map(([k, m]) => [k, m.waypointId === id ? { ...m, waypointId: null } : m]));
     const routes = p.routes.map((r) => ({ ...r, waypointIds: r.waypointIds.filter((w) => w !== id) }));
     if (JSON.stringify({ meeting, routes }) !== JSON.stringify({ meeting: p.meeting, routes: p.routes })) plan.update({ meeting, routes });
+    collections.routes.rewrite((r) => (r.waypointIds?.includes(id) ? { ...r, waypointIds: r.waypointIds.filter((w) => w !== id) } : r));
   }
   if (name === 'stores') {
     const unlink = (list) => list.map((x) => (x.storeId === id ? { ...x, storeId: null } : x));
@@ -159,9 +182,30 @@ function dropReferences(name, id) {
   }
 }
 
+/** Deletes the image files a Log entry had before a change, unless an entry still uses them. */
+function dropAttachments(before) {
+  const files = (before?.attachments || []).map((a) => a.file);
+  if (files.length) attachments.removeUnreferenced(files, collections.notes.all());
+}
+
+/** Stores an uploaded Log image: { name, data (base64) }. The entry links it with a PUT afterwards. */
+async function uploadAttachment(req, res) {
+  requireMember(req);
+  const { name, data } = await readBody(req, Math.ceil(ATTACHMENT_MAX / 3) * 4 + 64 * 1024);
+  send(res, 201, attachments.save(name, data));
+}
+
+function serveAttachment(req, res, name) {
+  requireMember(req);
+  const file = attachments.file(name);
+  if (!file) throw fail(404, 'no such attachment');
+  // nosniff comes with SECURITY; the type is set from the server-chosen extension, never from the upload.
+  sendFile(req, res, file, { 'cache-control': 'private, no-cache', 'content-disposition': 'inline' });
+}
+
 async function currentBackup() {
   const archives = await maps.scan().catch(() => []);
-  return buildBackup({ settings, collections, plan, maps: archives, appVersion: VERSION });
+  return buildBackup({ settings, collections, plan, maps: archives, appVersion: VERSION, attachments });
 }
 
 async function downloadBackup(req, res) {
@@ -180,7 +224,7 @@ async function restore(req, res) {
   checkBackup(backup);
   let snapshot = null;
   if (!dryRun) snapshot = snapshots.save('pre-restore', await currentBackup());
-  const report = restoreBackup(backup, { mode, dryRun: !!dryRun }, { settings, collections, plan });
+  const report = restoreBackup(backup, { mode, dryRun: !!dryRun }, { settings, collections, plan, attachments });
   send(res, 200, { dryRun: !!dryRun, mode, report, snapshot });
 }
 
@@ -195,16 +239,24 @@ async function putSettings(req, res) {
   const before = settings.value.access.pinHash;
   const value = settings.update(await readBody(req), who);
   if (settings.value.access.pinHash !== before) sessions.clear(); // a new or removed PIN signs every device out
+  applyPowerMode();
   send(res, 200, value);
 }
 const MAP_ADMIN = 'map downloads are only available from the host machine';
 
 async function status(req, res) {
-  const [ai, docker] = await Promise.all([aiStatus(settings.value.ai), depot.docker()]);
+  // In low-power mode the advisor is off, so the model server is not probed.
+  const LOW_POWER_AI = { online: false, models: [], error: 'low-power mode' };
+  const [ai, docker] = await Promise.all([lowPower() ? LOW_POWER_AI : aiStatus(settings.value.ai), depot.docker()]);
   const cats = new Set(manual.index().map((a) => a.category));
   send(res, 200, {
     ...systemStatus(DATA),
-    ai: { online: ai.online, models: ai.models, error: ai.error, provider: settings.value.ai.provider, model: settings.value.ai.model || ai.models[0] || '' },
+    power: { ...power.status(), lowPower: lowPower() },
+    ai: {
+      online: ai.online, models: ai.models, error: ai.error, provider: settings.value.ai.provider, model: chatModel(settings.value.ai, ai),
+      household: householdAllowed(req), householdLocal: isLocalModelUrl(settings.value.ai.baseUrl),
+      retrieval: advisorRetrieval(ai),
+    },
     docker,
     manual: { articles: manual.articles.length, categories: cats.size },
     server: { port: PORT, lanMode: !LOOPBACK_ONLY, version: VERSION },
@@ -256,14 +308,18 @@ const ROUTES = [
   ['POST', new RegExp(`${DB}$`), async ({ req, res }, name) => { requireMember(req); send(res, 201, collections[name].upsert(await bodyWithoutId(req))); }],
   ['PUT', DB_ITEM, async ({ req, res }, name, id) => {
     requireMember(req);
+    const before = collections[name].all().find((x) => x.id === id);
     const item = collections[name].upsert(await bodyWithoutId(req), id);
     if (!item) throw fail(404, 'not found');
+    if (name === 'notes') dropAttachments(before);
     send(res, 200, item);
   }],
   ['DELETE', DB_ITEM, ({ req, res }, name, id) => {
     requireMember(req);
+    const before = collections[name].all().find((x) => x.id === id);
     const ok = collections[name].remove(id);
     if (ok) dropReferences(name, id);
+    if (ok && name === 'notes') dropAttachments(before);
     send(res, 200, { ok });
   }],
 
@@ -274,6 +330,8 @@ const ROUTES = [
     send(res, 200, plan.update({ reviewedAt: new Date().toISOString().slice(0, 10) }));
   }],
   ['GET', '/api/kits/templates', ({ res }) => send(res, 200, kitTemplates)],
+  ['GET', '/api/checkin', ({ req, res }) => { requireMember(req); send(res, 200, checkin.get()); }],
+  ['PUT', '/api/checkin', async ({ req, res }) => { requireMember(req); send(res, 200, checkin.update(await readBody(req))); }],
 
   ['GET', '/api/backup', ({ req, res }) => downloadBackup(req, res)],
   ['POST', '/api/restore', ({ req, res }) => restore(req, res)],
@@ -287,6 +345,11 @@ const ROUTES = [
 
   ['POST', '/api/hash', ({ req, res }) => hash(req, res)],
   ['POST', '/api/chat', ({ req, res }) => chat(req, res)],
+  ['POST', '/api/ai/pull/check', ({ req, res }) => pullCheck(req, res)],
+  ['POST', '/api/ai/pull', ({ req, res }) => pull(req, res)],
+
+  ['POST', '/api/attachments', ({ req, res }) => uploadAttachment(req, res)],
+  ['GET', /^\/api\/attachments\/([0-9a-f-]{36}\.(?:jpg|png|webp|gif))$/, ({ req, res }, name) => serveAttachment(req, res, name)],
 
   ['GET', /^\/api\/maps\/tile\/(\d{1,2})\/(\d{1,6})\/(\d{1,6})$/, ({ req, res }, z, x, y) => mapTile(req, res, +z, +x, +y)],
   ['GET', '/api/maps', async ({ req, res }) => send(res, 200, { archives: await maps.scan(), job: maps.status(), canAdmin: canAdmin(req), maxTiles: MAX_TILES })],
@@ -305,7 +368,23 @@ const ROUTES = [
     send(res, 200, { ok: true });
   }],
 
-  ['GET', '/api/depot', async ({ req, res }) => send(res, 200, { ...(await depot.list()), canAdmin: canAdmin(req) })],
+  ['GET', '/api/depot', async ({ req, res }) => {
+    const [list, usage] = await Promise.all([depot.list(), content.usage().catch(() => ({}))]);
+    send(res, 200, { ...list, usage, canAdmin: canAdmin(req) });
+  }],
+  ['GET', '/api/depot/content', async ({ req, res }) => send(res, 200, { ...(await content.list()), canAdmin: canAdmin(req) })],
+  ['POST', '/api/depot/content/download', async ({ req, res }) => {
+    requireAdmin(req, CONTENT_ADMIN);
+    send(res, 202, await content.download(await readBody(req)));
+  }],
+  ['POST', '/api/depot/content/cancel', async ({ req, res }) => {
+    requireAdmin(req, CONTENT_ADMIN);
+    send(res, 200, content.cancel(await readBody(req)));
+  }],
+  ['POST', '/api/depot/content/delete', async ({ req, res }) => {
+    requireAdmin(req, CONTENT_ADMIN);
+    send(res, 200, await content.remove(await readBody(req)));
+  }],
   ['POST', /^\/api\/depot\/([a-z0-9-]+)\/(start|stop|remove)$/, async ({ req, res }, id, action) => {
     requireAdmin(req, 'depot control is only available from the host machine');
     send(res, 200, await depot.action(id, action));
@@ -329,6 +408,69 @@ function api(req, res, url) {
   throw fail(404, 'no such endpoint');
 }
 
+const MODEL_ADMIN = 'models can only be pulled from the host machine';
+
+/** How the Advisor finds manual passages: { mode: 'keyword' } or the embedding index's status. */
+function advisorRetrieval(status) {
+  const embedModel = status.online ? pickEmbedModel(settings.value.ai.embedModel, status.models) : '';
+  if (!embedModel) return { mode: 'keyword' };
+  const s = embeddings.status(embedModel, manual.signature);
+  // Start indexing as soon as an embedding model shows up; a failed build is retried by the next question.
+  if (!s.ready && !s.building && !s.error) embeddings.build(settings.value.ai, embedModel, manual.chunks(), manual.signature);
+  return { mode: s.ready ? 'embeddings' : 'keyword', ...s };
+}
+
+/** The chat model: the configured one, else the first installed model that is not an embedding model. */
+const chatModel = (ai, status) => ai.model || status.models.find((m) => !isEmbedModel(m)) || '';
+
+/**
+ * Whether household data (people, allergies, medications) may go into the system prompt: the host
+ * turned it on, this device may see household data, and the model server is local (never a cloud API).
+ */
+const householdAllowed = (req) => settings.value.ai.householdContext === true && role(req) !== 'guest' && isLocalModelUrl(settings.value.ai.baseUrl);
+
+/** Size and fit of a model before pulling it: { model, size, source, fit, memTotal, memFree, diskFree }. */
+async function pullCheck(req, res) {
+  requireAdmin(req, MODEL_ADMIN);
+  const model = modelName((await readBody(req)).model);
+  if (!model) throw fail(400, 'not a model name (for example llama3.2:3b)');
+  const found = await registrySize(model);
+  if (found?.missing) throw fail(404, `the Ollama library has no model called ${model}`);
+  const size = found?.size ?? estimateSize(model);
+  let source = 'unknown';
+  if (found?.size) source = 'registry';
+  else if (size) source = 'estimate';
+  const { system } = systemStatus(DATA);
+  const machine = { memTotal: system.memTotal, memFree: system.memFree, diskFree: system.disk?.free ?? null };
+  send(res, 200, { model, size, source, ...machine, fit: modelFit({ size, ...machine }) });
+}
+
+let pulling = null; // the model being pulled, one at a time
+
+/** Pulls a model on the Ollama server, streaming progress as NDJSON: { type: 'progress' | 'done' | 'error' }. */
+async function pull(req, res) {
+  requireAdmin(req, MODEL_ADMIN);
+  const ai = settings.value.ai;
+  if (ai.provider !== 'ollama') throw fail(400, 'models can only be pulled on an Ollama server; use your server\'s own tools');
+  const model = modelName((await readBody(req)).model);
+  if (!model) throw fail(400, 'not a model name (for example llama3.2:3b)');
+  if (pulling) throw fail(409, `already pulling ${pulling}`);
+  pulling = model;
+  res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store', ...SECURITY });
+  const emit = (o) => res.write(JSON.stringify(o) + '\n');
+  const abort = new AbortController();
+  res.on('close', () => abort.abort());
+  try {
+    await pullModel(ai, model, (p) => emit({ type: 'progress', ...p }), abort.signal);
+    emit({ type: 'done', model });
+  } catch (error) {
+    if (!abort.signal.aborted) emit({ type: 'error', message: error.cause?.code || error.message });
+  } finally {
+    pulling = null;
+  }
+  res.end();
+}
+
 async function chat(req, res) {
   const body = await readBody(req);
   const history = (Array.isArray(body.messages) ? body.messages : [])
@@ -337,25 +479,29 @@ async function chat(req, res) {
     .map((x) => ({ role: x.role, content: x.content.slice(0, 8000) }));
   const question = [...history].reverse().find((x) => x.role === 'user');
   if (!question) throw fail(400, 'no question');
+  if (lowPower()) throw fail(503, 'the advisor is off in low-power mode: turn it off under Command, Power');
 
   res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store', ...SECURITY });
   const emit = (o) => res.write(JSON.stringify(o) + '\n');
-  // Ground the answer in the best-matching passages; cite each article once.
-  const passages = manual.passages(question.content, 4);
-  const cited = [...new Map(passages.map((x) => [x.article.id, x.article])).values()];
-  emit({ type: 'sources', items: cited.map(({ id, title, category, summary }) => ({ id, title, category, summary })) });
-
   const ai = settings.value.ai;
   const status = await aiStatus(ai);
-  const model = ai.model || status.models[0];
+  // Ground the answer in the best-matching passages (embeddings when available, else keywords); cite each article once.
+  const embedModel = status.online ? pickEmbedModel(ai.embedModel, status.models) : '';
+  const { passages, mode } = await retrieve({ manual, index: embeddings, ai, embedModel, question: question.content });
+  const cited = [...new Map(passages.map((x) => [x.article.id, x.article])).values()];
+  emit({ type: 'sources', retrieval: mode, items: cited.map(({ id, title, category, summary }) => ({ id, title, category, summary })) });
+
+  const model = chatModel(ai, status);
   if (!status.online || !model) {
     emit({ type: 'offline', reason: status.online ? 'no model installed on the model server' : 'model server unreachable' });
     return res.end();
   }
+  const household = householdAllowed(req) ? householdPrompt(collections.people.all()) : '';
+  if (household) emit({ type: 'context', household: true });
   const abort = new AbortController();
   res.on('close', () => abort.abort());
   try {
-    const system = buildPrompt(passages);
+    const system = buildPrompt(passages, { household });
     await streamChat(ai, model, [{ role: 'system', content: system }, ...history], (text) => emit({ type: 'delta', text }), abort.signal);
     emit({ type: 'done', model });
   } catch (error) {
@@ -391,6 +537,14 @@ function sendFile(req, res, file, extra = {}) {
 
 function serveStatic(req, res, url) {
   if (req.method !== 'GET' && req.method !== 'HEAD') throw fail(405, 'method not allowed');
+  // Installable app: the shell list for the service worker, the worker itself (whole-site scope), and the
+  // HTTPS certificate so phones can trust it (public: it holds no key).
+  if (url.pathname === '/app-shell.json') return send(res, 200, shellManifest(PUBLIC));
+  if (url.pathname === '/sw.js') return sendFile(req, res, path.join(PUBLIC, 'sw.js'), { 'service-worker-allowed': '/' });
+  if (url.pathname === '/shelter.crt') {
+    if (!tls) throw fail(404, 'HTTPS is off');
+    return sendFile(req, res, tls.file, { 'content-type': 'application/x-x509-ca-cert', 'content-disposition': 'attachment; filename="shelter.crt"' });
+  }
   // Figures stored beside manual content: /content/<folder>/img/<file>
   const fig = url.pathname.match(/^\/content\/([a-z0-9][a-z0-9-]*)\/img\/([A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpe?g|gif|webp))$/);
   if (fig) {
@@ -406,7 +560,7 @@ function serveStatic(req, res, url) {
   sendFile(req, res, file);
 }
 
-const server = http.createServer(async (req, res) => {
+async function handle(req, res) {
   try {
     if (!hostAllowed(req)) throw fail(403, 'host not allowed');
     const url = new URL(req.url, 'http://localhost'); // base only for parsing the path and query
@@ -417,7 +571,19 @@ const server = http.createServer(async (req, res) => {
     if (!error.status) console.error(error);
     send(res, error.status || 500, { error: error.status ? error.message : 'internal error' });
   }
-});
+}
+
+// Optional HTTPS (--https or SHELTER_HTTPS=1): phones only allow GPS and offline install over HTTPS.
+// A self-signed certificate is made in <data>/tls on demand (server/https.js). Without openssl, plain HTTP.
+let tls = null;
+if (httpsRequested()) {
+  try {
+    tls = loadCert(DATA, { hosts: certHosts({ lan: systemStatus(DATA).system.lan, hostname: machineName() }) });
+  } catch (error) { console.warn(`\n  ${error.message}\n`); }
+}
+const SCHEME = tls ? 'https' : 'http';
+// With HTTPS, plain-HTTP requests from this machine (health checks, installers) are still answered; others are redirected.
+const server = tls ? dualServer(tls, handle, { keepPlain: isLoopback }) : http.createServer(handle);
 
 server.on('error', (e) => {
   console.error(e.code === 'EADDRINUSE' ? `Port ${PORT} is in use. Set PORT=<n> to choose another.` : e.message);
@@ -426,12 +592,14 @@ server.on('error', (e) => {
 
 server.listen(PORT, HOST, () => {
   dailySnapshot().catch(() => {}); // logs its own errors
+  applyPowerMode();
   setInterval(dailySnapshot, 6 * 3600 * 1000).unref();
   console.log(`\n  SHELTER // field node online`);
   // In a bridged container PORT is the internal one; SHELTER_PORT is what the host publishes.
   const shown = process.env.SHELTER_PORT || PORT;
-  console.log(`  local   http://localhost:${shown}`);
-  if (!LOOPBACK_ONLY) for (const ip of systemStatus(DATA).system.lan) console.log(`  lan     http://${ip}:${shown}`);
+  console.log(`  local   ${SCHEME}://localhost:${shown}`);
+  if (!LOOPBACK_ONLY) for (const ip of systemStatus(DATA).system.lan) console.log(`  lan     ${SCHEME}://${ip}:${shown}`);
   else console.log(`  lan     disabled (start with --lan to serve other devices)`);
+  if (tls) console.log(`  https   ${tls.created ? 'new ' : ''}certificate ${tls.file}\n          SHA-256 ${tls.fingerprint}\n          phones can install it from /shelter.crt`);
   console.log(`  manual  ${manual.articles.length} entries   data  ${DATA}\n`);
 });

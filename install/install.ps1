@@ -12,6 +12,7 @@ param(
   [int]$Port = 0,
   [switch]$Lan,
   [switch]$Local,
+  [switch]$Https,
   [string]$Dir = "",
   [switch]$Ai,
   [switch]$NoAi,
@@ -58,6 +59,7 @@ Shelter installer (Windows)
   -Port N      Port for the web interface (default $DefaultPort)
   -Lan         Serve phones and tablets on your network
   -Local       Serve this computer only (default)
+  -Https       Serve over HTTPS with a self-signed certificate (phones need it for GPS and offline use)
   -Dir PATH    Install folder (default $HOME\Shelter)
   -Ai / -NoAi  Set up the local AI (Ollama + $AiModel, about 2.5 GB) or skip the question
   -Yes         Accept the defaults, ask nothing
@@ -173,6 +175,14 @@ if ($useLan) {
   Warn "On Docker Desktop, Shelter cannot tell this PC apart from other devices,"
   Warn "so Depot start/stop buttons are turned off in network mode. Linux does not have this limit."
 }
+$useHttps = [bool]$Https
+if (-not $useHttps -and $useLan) {
+  Info "Phones only share their GPS position and keep Shelter for offline use over HTTPS. Shelter makes its"
+  Info "own certificate; each phone shows a warning once (or install the certificate from /shelter.crt)."
+  $d = if ((EnvGet "SHELTER_HTTPS" $prevEnv) -eq "1") { "y" } else { "n" }
+  $useHttps = Ask "Use HTTPS for phones and tablets?" $d
+}
+$scheme = if ($useHttps) { "https" } else { "http" }
 
 # ---------- download ----------
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("shelter-" + [guid]::NewGuid().ToString("N"))
@@ -239,6 +249,7 @@ SHELTER_BIND=$bind
 SHELTER_HOSTNAME=$env:COMPUTERNAME
 SHELTER_HOST_LAN=$(LanIp)
 SHELTER_REMOTE_ADMIN=0
+SHELTER_HTTPS=$(if ($useHttps) { "1" } else { "0" })
 "@
 [IO.File]::WriteAllText((Join-Path $App ".env"), ($envText -replace "`r`n", "`n"))
 
@@ -249,7 +260,9 @@ Compose up -d --build --remove-orphans
 Info "Waiting for Shelter to answer"
 $up = $false
 for ($i = 0; $i -lt 45; $i++) {
-  try { Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/api/status" -TimeoutSec 3 -ErrorAction Stop | Out-Null; $up = $true; break } catch { Start-Sleep -Seconds 2 }
+  # With HTTPS this PC gets a redirect (Docker Desktop hides its address): any HTTP answer means Shelter is up.
+  try { Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/api/status" -TimeoutSec 3 -MaximumRedirection 0 -ErrorAction Stop | Out-Null; $up = $true; break }
+  catch { if ($_.Exception.Response) { $up = $true; break }; Start-Sleep -Seconds 2 }
 }
 if (-not $up) { Fail "Shelter did not start. See the log with: cd `"$App`"; docker compose logs" }
 
@@ -267,7 +280,7 @@ if ($useLan) {
 }
 
 # ---------- shortcuts ----------
-$url = "[InternetShortcut]`r`nURL=http://localhost:$Port/`r`nIconFile=$App\public\favicon.svg`r`n"
+$url = "[InternetShortcut]`r`nURL=${scheme}://localhost:$Port/`r`nIconFile=$App\public\favicon.svg`r`n"
 foreach ($folder in @([Environment]::GetFolderPath("Desktop"), [Environment]::GetFolderPath("Programs"))) {
   try { [IO.File]::WriteAllText((Join-Path $folder "Shelter.url"), $url) } catch { }
 }
@@ -317,10 +330,11 @@ if ($wantAi) {
 # ---------- done ----------
 Step "Shelter is running"
 Write-Host ""
-Info "Open:  http://localhost:$Port   (or use the Shelter shortcut)"
+Info "Open:  ${scheme}://localhost:$Port   (or use the Shelter shortcut)"
 if ($useLan) {
   $ip = LanIp
-  if ($ip) { Info "From phones and tablets:  http://${ip}:$Port" }
+  if ($ip) { Info "From phones and tablets:  ${scheme}://${ip}:$Port" }
+  if ($useHttps) { Info "Phones warn about the self-signed certificate once. To trust it, open ${scheme}://${ip}:$Port/shelter.crt on the phone." }
   Info "If Windows Firewall asks about Docker, allow it on private networks."
 }
 Write-Host ""

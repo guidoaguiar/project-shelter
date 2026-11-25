@@ -152,8 +152,11 @@ const DEFAULTS = {
   people: 2,
   expiryWarnDays: 90,
   lastBackup: null,
+  power: validate('power', {}), // low-power mode and the power budget (server/schema.js)
   // SHELTER_AI_URL changes the default only; a URL saved under Configuration wins.
-  ai: { provider: 'ollama', baseUrl: process.env.SHELTER_AI_URL || 'http://127.0.0.1:11434', model: '', apiKey: '' },
+  // householdContext: the host allows the Advisor to see people, allergies and medications (local model servers only).
+  // embedModel: embedding model for Advisor retrieval; '' picks an installed one automatically.
+  ai: { provider: 'ollama', baseUrl: process.env.SHELTER_AI_URL || 'http://127.0.0.1:11434', model: '', apiKey: '', householdContext: false, embedModel: '' },
 };
 
 export class Settings {
@@ -164,7 +167,7 @@ export class Settings {
   constructor(file, { fresh = false } = {}) {
     this.file = file;
     const saved = readJson(file, {});
-    this.value = { ...DEFAULTS, ...saved, ai: { ...DEFAULTS.ai, ...saved.ai } };
+    this.value = { ...DEFAULTS, ...saved, ai: { ...DEFAULTS.ai, ...saved.ai }, power: { ...DEFAULTS.power, ...saved.power } };
     if (!saved.access || !LAN_POLICIES.includes(saved.access.lanWrites)) {
       this.value.access = { lanWrites: fresh ? 'pin' : 'open', pinHash: saved.access?.pinHash || '' };
       writeJson(file, this.value); // the default is decided once, then kept
@@ -185,8 +188,10 @@ export class Settings {
   /** Applies a change from a client with the given role. Model and access settings need the host. */
   update(input, role = 'host') {
     if (role !== 'host' && ('ai' in input || 'access' in input)) throw fail(403, 'model and access settings can only be changed on the host machine');
+    const power = 'power' in input ? validate('power', input.power, { partial: true }) : null; // throws before anything changes
     if (input.access && typeof input.access === 'object') updateAccess(this.value.access, input.access);
     const v = this.value;
+    if (power) v.power = { ...v.power, ...power };
     if ('callsign' in input) v.callsign = String(input.callsign || '').slice(0, 24).toUpperCase() || DEFAULTS.callsign;
     if ('lat' in input) v.lat = clampOrNull(input.lat, -90, 90);
     if ('lon' in input) v.lon = clampOrNull(input.lon, -180, 180);
@@ -199,7 +204,7 @@ export class Settings {
 }
 
 /** The settings a backup carries and a restore brings back: never model, access or backup state. */
-export const PORTABLE_SETTINGS = ['callsign', 'lat', 'lon', 'people', 'expiryWarnDays'];
+export const PORTABLE_SETTINGS = ['callsign', 'lat', 'lon', 'people', 'expiryWarnDays', 'power'];
 
 /** pin: a new PIN, or '' to remove it. lanWrites: the policy; 'pin' needs a PIN. Validated before anything changes. */
 function updateAccess(access, a) {
@@ -235,6 +240,8 @@ function updateAi(ai, a) {
   if ('provider' in a) ai.provider = a.provider === 'openai' ? 'openai' : 'ollama';
   if ('baseUrl' in a && /^https?:\/\//i.test(String(a.baseUrl))) ai.baseUrl = stripTrailingSlashes(String(a.baseUrl)).slice(0, 300);
   if ('model' in a) ai.model = String(a.model || '').slice(0, 120);
+  if ('householdContext' in a) ai.householdContext = a.householdContext === true;
+  if ('embedModel' in a) ai.embedModel = String(a.embedModel || '').trim().slice(0, 120);
   if (typeof a.apiKey === 'string') ai.apiKey = a.apiKey.slice(0, 400);
   // A key is only ever sent to the server it was entered for.
   else if (`${ai.provider}|${ai.baseUrl}` !== before) ai.apiKey = '';

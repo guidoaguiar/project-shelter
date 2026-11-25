@@ -359,3 +359,144 @@ tr.active td { background: var(--raise); }
   #print .wallet-title, #print .wallet-sub { font: 600 7pt var(--mono); letter-spacing: .12em; margin: 0 0 1.5mm; }
   #print .wallet-sub { margin-top: 2mm; }
 }
+
+/* ---------- phones and touch screens (2.2): touch targets of at least 44 px, small-screen layout ---------- */
+@media (max-width: 820px), (pointer: coarse) {
+  .btn, .tabs button, .tabs a { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; padding-top: 8px; padding-bottom: 8px; }
+  .btn.sm { min-height: 44px; min-width: 44px; padding: 6px 10px; font-size: 10px; }
+  .rail a { min-height: 44px; align-items: center; }
+  .list a, .list button.item, .list details > summary { min-height: 44px; padding-top: 10px; padding-bottom: 10px; }
+  .list details.grp > summary { min-height: 44px; display: flex; align-items: center; }
+  /* 16 px text stops iOS zooming into a field on focus. */
+  input, select { min-height: 44px; font-size: 16px; }
+  textarea, .chat-in textarea { font-size: 16px; }
+  input[type="checkbox"], input[type="radio"] { min-height: 0; width: 22px; height: 22px; }
+  label.chk { min-height: 44px; }
+  .map-ctl { gap: 6px; }
+  .map-ctl .btn { min-width: 44px; min-height: 44px; padding: 0; font-size: 18px; }
+  .prose a { padding: 4px 0; }
+}
+@media (max-width: 820px) {
+  #app { grid-template-rows: 52px auto minmax(0, 1fr) 24px; }
+  .topbar { padding: 0 10px; }
+  .rail a { padding: 0 14px; }
+  .vh h1 { font-size: 14px; letter-spacing: .18em; }
+  .map-box { height: 62dvh; min-height: 320px; }
+  table.t th, table.t td { padding: 8px; }
+  .colcard { padding: 14px; }
+  #toast { left: 12px; right: 12px; max-width: none; bottom: calc(32px + env(safe-area-inset-bottom, 0px)); }
+}
+@media (max-width: 480px) {
+  .topbar { gap: 8px; padding: 0 8px; }
+  .brand-name { letter-spacing: .2em; }
+  .tele .k { display: none; }
+  .telemetry { gap: 8px; }
+  #theme { padding-left: 8px; padding-right: 8px; letter-spacing: .08em; }
+  main { padding: 12px 10px 20px; }
+  .grid { gap: 10px; }
+}
+
+/* ---------- command situation dashboard and power (IMPROVEMENTS 2.1, 2.7) ---------- */
+.sit-head { font-size: 9px; letter-spacing: .2em; color: var(--dim); margin: 14px 0 0; }
+.sit-link { text-decoration: none; display: block; }
+.sit-link:hover { color: var(--accent); }
+.sit-sun { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; margin-top: 4px; }
+.checklist .mark.bad { color: var(--bad); }
+.checklist .mark.warn { color: var(--warn); }
+.list.checkin { margin-top: 8px; border-top: 1px solid var(--line); }
+.list.checkin button.item { display: flex; gap: 10px; align-items: baseline; min-height: 40px; padding: 10px 12px; }
+.list.checkin .mark { width: 14px; color: var(--warn); flex: none; }
+.list.checkin .ok .mark { color: var(--ok); }
+.list.checkin .t1 { flex: 1; }
+.list.checkin .ok .t1 { color: var(--dim); }
+.banner.power-banner { border-left-color: var(--bad); display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.banner.power-banner b { color: var(--bad); }
+.sys-fold { margin-top: 14px; }
+.sys-fold > summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; gap: 10px; padding: 8px 12px; border: 1px solid var(--line); background: var(--panel); font-size: 10px; letter-spacing: .2em; color: var(--dim); }
+.sys-fold > summary::-webkit-details-marker { display: none; }
+.sys-fold > summary > span:first-child::before { content: "+"; color: var(--faint); margin-right: 8px; }
+.sys-fold[open] > summary > span:first-child::before { content: "−"; }
+.sys-fold > summary:hover { color: var(--text); }
+.sys-fold > summary .dim { letter-spacing: .08em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sys-fold > .grid { margin-top: 14px; }
+.power-table td { padding: 4px 6px; }
+.power-table input { padding: 4px 6px; }
+@media (max-width: 820px) { .sys-fold > summary .dim { display: none; } }
+@media print { .sys-fold, .power-banner { display: none !important; } }
+
+/* ---------- Depot content manager (2.5): CONTENT tab in views/depot.js, views/parts/content.js ---------- */
+.grid[hidden], .ct-host[hidden] { display: none; }
+.tag.warn { border-color: var(--warn); color: var(--warn); }
+.ct-tools { margin-bottom: 12px; }
+.ct-tools input[type=search] { flex: 1 1 240px; width: auto; }
+.ct-tools label { gap: 6px; cursor: pointer; }
+.ct-tools input[type=checkbox] { width: auto; }
+.ct-item { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.ct-main { flex: 1 1 auto; min-width: 0; }
+.ct-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: 0 0 auto; }
+.ct-title { font-size: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ct-sub { font-size: 10px; letter-spacing: .12em; color: var(--dim); margin: 3px 0; overflow-wrap: anywhere; }
+.ct-desc { font-size: 12px; color: var(--dim); font-family: var(--sans); line-height: 1.4; margin-top: 2px; }
+.ct-meter { margin: 8px 0 0; }
+.ct-usage { columns: 2 220px; column-gap: 24px; margin: 8px 0; }
+.ct-local { margin-top: 12px; }
+@media (max-width: 640px) {
+  .ct-item { flex-direction: column; }
+  .ct-side { align-items: flex-start; }
+}
+
+/* ===== 2.4 Advisor and 2.6 Log (advisor.js, log.js, parts/models.js) ===== */
+.msg .sources .advisor-save { margin-left: auto; padding: 2px 8px; font-size: 9px; }
+.advisor-household { color: var(--accent); margin-bottom: 6px; letter-spacing: .12em; }
+.model-tools { border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; }
+.model-tools-title { font-size: 10px; letter-spacing: .22em; color: var(--dim); }
+.model-pull .row { align-items: flex-end; }
+.model-pull .f { flex: 1 1 220px; }
+.model-check { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; font: 13px/1.5 var(--sans); }
+.model-progress { width: 100%; height: 8px; margin-top: 8px; accent-color: var(--accent); }
+.model-progress[hidden] { display: none; }
+.advisor-options { display: flex; flex-direction: column; gap: 8px; }
+.advisor-options .row { align-items: flex-end; }
+.advisor-options .f { flex: 1 1 220px; }
+.advisor-check { display: flex; gap: 8px; align-items: flex-start; font: 14px/1.5 var(--sans); cursor: pointer; }
+.advisor-check input { width: auto; margin-top: 3px; }
+.log-filter { display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--line); }
+.log-filter .row { flex-wrap: nowrap; }
+.log-filter select { flex: 1; min-width: 0; }
+.log-dates .f { flex: 1; min-width: 0; }
+.list .t2 .tag { font-size: 8px; padding: 0 4px; }
+.log-rowform { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 10px; flex-wrap: wrap; }
+.log-rowform-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 6px; flex: 1 1 320px; }
+.log-attach { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
+.log-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-top: 10px; }
+.log-thumb { margin: 0; border: 1px solid var(--line); background: var(--raise); display: flex; flex-direction: column; }
+.log-thumb img { display: block; width: 100%; height: 120px; object-fit: cover; }
+.log-thumb figcaption { display: flex; flex-direction: column; gap: 4px; padding: 6px; font-size: 11px; overflow-wrap: anywhere; }
+.log-thumb figcaption .btn { align-self: flex-start; padding: 2px 8px; font-size: 9px; }
+.log-print-img { break-inside: avoid; margin: 12px 0; }
+.log-print-img img { max-width: 100%; max-height: 60vh; }
+@media (max-width: 820px) {
+  .log-rowform-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .log-thumb figcaption .btn, .msg .sources .advisor-save { min-height: 40px; }
+}
+/* ===== end 2.4 / 2.6 ===== */
+
+/* ---------- map: waypoint categories, routes, GPX and search (IMPROVEMENTS 2.3) ---------- */
+.btn.on { border-color: var(--accent); color: var(--accent); }
+.wpt-filter { padding-bottom: 0; }
+.wpt-filter .row { gap: 4px; }
+.wpt-list { max-height: 320px; overflow-y: auto; }
+.t tr.on td { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.tag.wpt-kind { font-size: 8px; padding: 0 4px; min-width: 34px; text-align: center; }
+.tag.wpt-kind[data-kind="home"], .tag.wpt-kind[data-kind="rally"] { border-color: var(--accent); color: var(--accent); }
+.tag.wpt-kind[data-kind="water"] { border-color: var(--water-line); color: var(--water-line); }
+.tag.wpt-kind[data-kind="cache"] { border-color: var(--warn); color: var(--warn); }
+.tag.wpt-kind[data-kind="shelter"] { border-color: var(--ok); color: var(--ok); }
+.tag.wpt-kind[data-kind="medical"], .tag.wpt-kind[data-kind="hazard"] { border-color: var(--bad); color: var(--bad); }
+.route-edit ol.route li { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.t.legs td, .t.legs th { font-size: 10px; padding: 3px 6px; }
+.poi-groups { gap: 4px; }
+@media (max-width: 820px) {
+  .wpt-filter .btn.sm, .poi-groups .btn.sm, .route-edit .btn.sm { min-height: 32px; min-width: 32px; }
+}
+/* ---------- end map 2.3 ---------- */

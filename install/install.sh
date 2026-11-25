@@ -32,6 +32,7 @@ Usage: install.sh [options]
   --port N        Port for the web interface (default $DEFAULT_PORT)
   --lan           Serve phones and tablets on your network
   --local         Serve this machine only (default)
+  --https         Serve over HTTPS with a self-signed certificate (phones need it for GPS and offline use)
   --dir PATH      Install folder (default /opt/shelter on Linux, ~/Shelter on macOS)
   --ai | --no-ai  Set up the local AI (Ollama + $AI_MODEL, about 2.5 GB) or skip the question
   --yes           Accept the defaults, ask nothing
@@ -45,12 +46,13 @@ EOF
 }
 
 # ---------- options ----------
-PORT="" LAN="" BASE="" AI="" SOURCE="" ASSUME_YES=0 UNINSTALL=0
+PORT="" LAN="" HTTPS="" BASE="" AI="" SOURCE="" ASSUME_YES=0 UNINSTALL=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --port) PORT="${2:-}"; shift 2 ;;
     --lan) LAN=1; shift ;;
     --local) LAN=0; shift ;;
+    --https) HTTPS=1; shift ;;
     --dir) BASE="${2:-}"; shift 2 ;;
     --ai) AI=1; shift ;;
     --no-ai) AI=0; shift ;;
@@ -236,6 +238,14 @@ if [[ -z "$LAN" ]]; then
 fi
 BIND="127.0.0.1"; [[ $LAN == 1 ]] && BIND="0.0.0.0"
 
+if [[ -z "$HTTPS" && $LAN == 1 ]]; then
+  info "Phones only share their GPS position and keep Shelter for offline use over HTTPS. Shelter makes its"
+  info "own certificate; each phone shows a warning once (or install the certificate from /shelter.crt)."
+  if ask "Use HTTPS for phones and tablets?" "$([[ $(env_get SHELTER_HTTPS "$PREV_ENV") == 1 ]] && echo y || echo n)"; then HTTPS=1; else HTTPS=0; fi
+fi
+HTTPS="${HTTPS:-0}"
+SCHEME="http"; [[ $HTTPS == 1 ]] && SCHEME="https"
+
 REMOTE_ADMIN=0
 if [[ $LAN == 1 && $PLATFORM == mac ]]; then
   # Docker Desktop hides client addresses, so Shelter cannot tell this Mac from a phone.
@@ -302,6 +312,7 @@ SHELTER_BIND=$BIND
 SHELTER_HOSTNAME=$(hostname -s 2>/dev/null || hostname)
 SHELTER_HOST_LAN=$HOST_LAN
 SHELTER_REMOTE_ADMIN=$REMOTE_ADMIN
+SHELTER_HTTPS=$HTTPS
 EOF
 
 if [[ $PLATFORM == mac ]]; then chown -R "$OWNER" "$BASE" 2>/dev/null || true; fi
@@ -353,7 +364,7 @@ case "\${1:-}" in
   status)  docker compose ps; docker ps --filter label=shelter.service --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' ;;
   logs)    docker compose logs -f --tail 100 ;;
   update)  curl -fsSL https://raw.githubusercontent.com/$REPO/$BRANCH/install/install.sh -o /tmp/shelter-install.sh && bash /tmp/shelter-install.sh --yes --dir "$BASE" ;;
-  open)    url="http://localhost:$PORT"; (xdg-open "\$url" || open "\$url") >/dev/null 2>&1 || echo "\$url" ;;
+  open)    url="$SCHEME://localhost:$PORT"; (xdg-open "\$url" || open "\$url") >/dev/null 2>&1 || echo "\$url" ;;
   pin)     shift; docker compose exec shelter node server/pin.js "\$@" ;;
   *) echo "Usage: shelter start|stop|restart|status|logs|update|open|pin"; exit 1 ;;
 esac
@@ -400,9 +411,12 @@ fi
 # ---------- done ----------
 step "Shelter is running"
 echo
-info "${B}Open:${N}  http://localhost:$PORT"
+info "${B}Open:${N}  $SCHEME://localhost:$PORT"
 if [[ $LAN == 1 ]]; then
-  ip="$(lan_ip)"; [[ -n "$ip" ]] && info "${B}From phones and tablets:${N}  http://$ip:$PORT"
+  ip="$(lan_ip)"; [[ -n "$ip" ]] && info "${B}From phones and tablets:${N}  $SCHEME://$ip:$PORT"
+  if [[ $HTTPS == 1 ]]; then
+    info "Phones warn about the self-signed certificate once. To trust it, open $SCHEME://${ip:-this-machine}:$PORT/shelter.crt on the phone."
+  fi
 fi
 echo
 info "It starts by itself when this computer boots."

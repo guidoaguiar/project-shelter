@@ -11,7 +11,7 @@
     "volume": "/data",
     "args": ["*.zim"],
     "needsFiles": ".zim",
-    "note": "Place .zim archives in the data folder below before deploying.",
+    "note": "Download .zim archives from the CONTENT tab, or place them in the data folder below, before deploying.",
     "links": [
       { "label": "KIWIX LIBRARY", "url": "https://library.kiwix.org" },
       { "label": "ALL ZIM FILES", "url": "https://download.kiwix.org/zim/" },
@@ -32,7 +32,7 @@
     "port": 8300,
     "containerPort": 8080,
     "volume": "/root/.kolibri",
-    "note": "Import channels (Khan Academy and others) from inside Kolibri while you have a link.",
+    "note": "Import channels (Khan Academy and others) from the CONTENT tab or from inside Kolibri while you have a link.",
     "links": [
       { "label": "CHANNEL CATALOG", "url": "https://catalog.learningequality.org" },
       { "label": "DOCUMENTATION", "url": "https://kolibri.readthedocs.io" }
@@ -79,7 +79,7 @@
     "port": 11434,
     "containerPort": 11434,
     "volume": "/root/.ollama",
-    "note": "After deploying, pull a model once: docker exec shelter-ollama ollama pull llama3.2:3b",
+    "note": "After deploying, pull a model once under Command, Configuration: PULL MODEL (for example llama3.2:3b).",
     "links": [{ "label": "MODEL LIBRARY", "url": "https://ollama.com/library" }]
   },
   {

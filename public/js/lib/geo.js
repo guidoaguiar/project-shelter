@@ -92,6 +92,32 @@ export function rangeBearing(p, q) {
   return { km, bearing: (brg + 360) % 360 };
 }
 
+/**
+ * Legs between consecutive points ({ lat, lon }): each leg's distance (km) and initial bearing
+ * (degrees true), plus the total distance. Fewer than two points give no legs and 0 km.
+ */
+export function pathLegs(points) {
+  const legs = [];
+  let km = 0;
+  for (let i = 1; i < points.length; i++) {
+    const r = rangeBearing(points[i - 1], points[i]);
+    legs.push({ from: points[i - 1], to: points[i], ...r });
+    km += r.km;
+  }
+  return { legs, km };
+}
+
+/** Bounding box [west, south, east, north] of points, or null when there are none. */
+export function pointBounds(points) {
+  if (!points.length) return null;
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+  for (const p of points) {
+    w = Math.min(w, p.lon); e = Math.max(e, p.lon);
+    s = Math.min(s, p.lat); n = Math.max(n, p.lat);
+  }
+  return [w, s, e, n];
+}
+
 export const compassPoint = (deg) => ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'][Math.round(deg / 22.5) % 16];
 
 const jdToDate = (jd) => new Date((jd - 2_440_587.5) * 86_400_000);

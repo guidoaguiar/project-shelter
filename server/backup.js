@@ -13,9 +13,16 @@ const NAME = /^(auto|pre-restore)-[0-9TZ-]+\.json$/;
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
-/** The backup object for the node's current state. */
-export function buildBackup({ settings, collections, plan, maps = [], appVersion }) {
+/** Most bytes of Log images a backup carries (base64 adds a third), so a restore stays under its upload limit. */
+export const ATTACHMENTS_MAX = 24 * 1024 * 1024;
+
+/**
+ * The backup object for the node's current state. attachments (optional, server/attachments.js):
+ * Log images go in as base64 up to ATTACHMENTS_MAX; any that do not fit are listed in attachmentsOmitted.
+ */
+export function buildBackup({ settings, collections, plan, maps = [], appVersion, attachments }) {
   const s = settings.value;
+  const images = attachments && collections.notes ? attachments.exportAll(collections.notes.all(), ATTACHMENTS_MAX) : null;
   return {
     format: FORMAT,
     version: VERSION,
@@ -25,6 +32,8 @@ export function buildBackup({ settings, collections, plan, maps = [], appVersion
     collections: Object.fromEntries(Object.entries(collections).map(([name, c]) => [name, c.all()])),
     plan: plan.get(),
     maps: maps.filter((m) => !m.error).map((m) => ({ file: m.file, bounds: m.bounds, maxZoom: m.maxZoom })),
+    ...(images && { attachments: images.files }),
+    ...(images?.omitted.length ? { attachmentsOmitted: images.omitted } : {}),
   };
 }
 
@@ -40,11 +49,13 @@ export function checkBackup(b) {
  * Restores a backup. mode: 'merge' or 'replace'. Returns a report per collection, plus the plan and
  * settings. With dryRun nothing changes. Merge never touches settings; replace restores the portable ones.
  */
-export function restoreBackup(b, { mode, dryRun }, { settings, collections, plan }) {
+export function restoreBackup(b, { mode, dryRun }, { settings, collections, plan, attachments }) {
   checkBackup(b);
   if (mode !== 'merge' && mode !== 'replace') throw fail(400, 'mode must be merge or replace');
   const report = { collections: {}, plan: restorePlan(b.plan, plan, mode, dryRun), settings: restoreSettings(b.settings, settings, mode, dryRun) };
   for (const [name, c] of Object.entries(collections)) report.collections[name] = c.restore(b.collections[name] || [], mode, dryRun);
+  // Log images are only ever added: a restore never deletes an image file.
+  if (attachments) report.attachments = attachments.importAll(b.attachments, dryRun);
   return report;
 }
 

@@ -78,6 +78,10 @@ export default [
     languageOptions: { globals: globals.browser },
   },
   {
+    files: ['public/sw.js'],
+    languageOptions: { globals: globals.serviceworker },
+  },
+  {
     // Tests poll in sequence, use plain-http fixture URLs and async stubs on purpose.
     files: ['test/**/*.js'],
     rules: {

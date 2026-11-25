@@ -1,8 +1,14 @@
-// 01 COMMAND — node status, position, readiness and configuration.
+// 01 COMMAND — the situation first (supplies, kits, reviews, sun, check-in, power), then position,
+// readiness, plan and configuration, with the system meters folded away at the bottom.
 import { h, api, state, onStatus, saveSettings, home, toast, bytes, duration, hhmm, viewHeader, panel, kv, field, readiness, access, isHost, isGuest, pinForm, signOut, plural } from '../lib/core.js';
 import { completeness } from '../lib/plan.js';
-import { overdue } from '../lib/kits.js';
 import { toMGRS, toDMS, sunTimes, moonPhase } from '../lib/geo.js';
+import { powerLevel, batteryBanner, runtimeText, stateText } from '../lib/power.js';
+import { kitStatus, attention, checkinState, markCheckin, newCheckin } from '../lib/situation.js';
+import { modelTools } from './parts/models.js';
+
+/** Replaces an element's children, skipping null and false (which replaceChildren would print as text). */
+const fill = (el, ...rows) => el.replaceChildren(...rows.flat(Infinity).filter((x) => x != null && x !== false));
 
 function meter(label, frac, text) {
   const pct = Math.max(0, Math.min(1, frac || 0)) * 100;
@@ -68,15 +74,118 @@ function positionRows(pos, now) {
 
 const days = (n) => (n >= 100 ? Math.round(n) : n.toFixed(1));
 
+/** A days-of-supply tile; a dash while nothing is tracked. */
+const daysTile = (label, value, tracked, limit) =>
+  h('div.stat', h('div.lbl', label), h('div.big' + (tracked && value < limit ? '.warn' : ''), tracked ? days(value) : '—', tracked ? h('small', 'DAYS') : null));
+
+/** Days of water, food and meds, kit status and what is overdue. Sun times live in the Position panel. */
+function situationRows(r, kits, todo, pos, now) {
+  let kitText = 'SET UP';
+  if (kits.total) kitText = kits.due ? `${kits.due}/${kits.total} DUE` : `${kits.total} OK`;
+  return [
+    h('div.stat-row',
+      daysTile('WATER', r.waterDays, r.count, 3),
+      daysTile('FOOD', r.foodDays, r.count, 3),
+      h('div.stat', h('div.lbl', 'MEDS'), h('div.big' + (r.meds && r.meds.days < 7 ? '.bad' : ''), r.meds ? days(r.meds.days) : '—', r.meds ? h('small', 'DAYS') : null)),
+      h('div.stat', h('div.lbl', 'KITS'), h('a.big.sit-link' + (kits.due ? '.warn' : ''), { href: '#/stores/kits' }, kitText))),
+    h('div.lbl.sit-head', todo.length ? 'NEEDS ATTENTION' : 'NOTHING OVERDUE'),
+    todo.length
+      ? h('ul.checklist', todo.slice(0, 6).map((x) => h('li', h('span.mark.' + x.level, '!'), h('a', { href: x.href }, x.label))))
+      : h('p.hint', 'No expired supplies, overdue kit checks or plan reviews.'),
+    todo.length > 6 ? h('p.hint', `And ${todo.length - 6} more.`) : null,
+  ];
+}
+
+/** One person's check-in button: a tick and the time once accounted for. */
+function checkinRow(r, onclick) {
+  let note = r.kind === 'pet' ? 'PET' : '';
+  if (r.ok && r.at) note = hhmm(new Date(r.at));
+  return h('button.item' + (r.ok ? '.ok' : ''), { type: 'button', 'aria-pressed': r.ok ? 'true' : 'false', onclick },
+    h('span.mark', r.ok ? '✓' : '·'), h('span.t1', r.name), h('span.t3', note));
+}
+
+/** "Everyone accounted for": one line per person or pet in the plan, saved on the node. */
+function checkinPanel(people, saved) {
+  const body = h('div.pb');
+  let doc = saved || {};
+  async function save(next, message) {
+    try { doc = await api('/api/checkin', { method: 'PUT', body: next }); toast(message); paint(); } catch (error) { toast(error.message, true); }
+  }
+  function paint() {
+    const c = checkinState(doc, people);
+    const when = c.startedAt ? `${String(c.startedAt).slice(0, 10)} ${hhmm(new Date(c.startedAt))}` : 'NO CHECK-IN YET';
+    let headline = 'NOT CONFIRMED';
+    if (c.complete) headline = 'ALL ACCOUNTED FOR';
+    else if (c.total) headline = `${c.ok}/${c.total} ACCOUNTED FOR`;
+    fill(body, 
+      h('div.big' + (c.complete ? '.ok' : '.warn'), { style: 'font-size:18px' }, headline),
+      kv('STARTED', when, 'dim'),
+      c.total
+        ? h('div.list.checkin', c.rows.map((r) => checkinRow(r, () => save(markCheckin(c, r.personId, !r.ok), `${r.name.toUpperCase()} ${r.ok ? 'NOT CONFIRMED' : 'ACCOUNTED FOR'}`))))
+        : h('p.hint', 'Add the people in your household under Plan to check each one in by name.'),
+      h('div.row', { style: 'margin-top:10px' },
+        h('button.btn.primary', { type: 'button', onclick: () => save(markCheckin(c, null, true), 'EVERYONE ACCOUNTED FOR') }, 'EVERYONE ACCOUNTED FOR'),
+        h('button.btn', { type: 'button', onclick: () => save(newCheckin(c), 'NEW CHECK-IN STARTED') }, 'NEW CHECK-IN')));
+  }
+  paint();
+  return body;
+}
+
+/** A battery meter: the bar turns red when the charge is low. */
+function chargeMeter(label, percent) {
+  const p = Math.max(0, Math.min(100, percent || 0));
+  return h('div.meter',
+    h('div.row', h('span', label), h('b', `${Math.round(p)}%`)),
+    h('div.track', h('div.fill' + (p < 20 ? '.hot' : ''), { style: `width:${p.toFixed(1)}%` })));
+}
+
+const unitText = (u) => (u.percent === null ? '—' : Math.round(u.percent) + '%') + ' · ' + stateText(u.state);
+
+/** Turns low-power mode on or off (saved in settings; the node slows its samplers and stops the advisor). */
+const switchLowPower = (on) => saveSettings({ power: { lowPower: on } })
+  .then(() => toast(on ? 'LOW-POWER MODE ON' : 'LOW-POWER MODE OFF'), (error) => toast(error.message, true));
+
+/** The low-power button: off turns it on, on turns it off. */
+function lowPowerButton(low) {
+  if (low) return h('button.btn', { type: 'button', onclick: () => switchLowPower(false) }, 'TURN OFF LOW POWER');
+  return h('button.btn.primary', { type: 'button', onclick: () => switchLowPower(true) }, 'LOW-POWER MODE');
+}
+
+/** The battery or UPS rows: charge, runtime, each unit when there are several, and where the figures come from. */
+function batteryRows(p) {
+  if (!p?.present) return [];
+  const units = p.units || [];
+  const runtime = p.estimated ? `${runtimeText(p.runtimeMin)} (EST.)` : runtimeText(p.runtimeMin);
+  const label = units.length > 1 ? String(p.primary || 'BATTERY').toUpperCase() : 'CHARGE';
+  return [
+    p.percent === null ? null : chargeMeter(label, p.percent),
+    p.onBattery ? kv('RUNTIME', runtime, 'warn') : kv('RUNTIME', 'ON MAINS', 'dim'),
+    units.length > 1 ? units.map((u) => kv(String(u.name).toUpperCase(), unitText(u))) : null,
+    kv('SOURCE', String(p.source).toUpperCase(), 'dim'),
+  ];
+}
+
+/** Battery or UPS status, estimated runtime and the low-power switch. */
+function powerRows(p, guest) {
+  const lv = powerLevel(p);
+  const low = !!p?.lowPower;
+  return [
+    kv('POWER', lv.text, lv.level),
+    ...batteryRows(p),
+    kv('LOW-POWER MODE', low ? 'ON' : 'OFF', low ? 'warn' : 'dim'),
+    h('div.row', { style: 'margin-top:10px' },
+      guest ? null : lowPowerButton(low),
+      h('a.btn', { href: '#/tools/power', style: 'text-decoration:none' }, 'POWER BUDGET')),
+    h('p.hint', 'Low-power mode checks status every 60 s instead of 5 s, samples the CPU less often and turns off the advisor.'),
+    p?.error ? h('p.hint', `Power check: ${p.error}`) : null,
+  ];
+}
+
 function readinessRows(r, kitsDue, fromPlan) {
   let group = plural(r.people, 'PERSON', 'PEOPLE');
   if (fromPlan && r.pets) group += ' + ' + plural(r.pets, 'PET');
   return [
-    h('div.stat-row',
-      h('div.stat', h('div.lbl', 'WATER'), h('div.big', days(r.waterDays), h('small', 'DAYS'))),
-      h('div.stat', h('div.lbl', 'FOOD'), h('div.big', days(r.foodDays), h('small', 'DAYS'))),
-      h('div.stat', h('div.lbl', 'MEDS'), h('div.big' + (r.meds && r.meds.days < 7 ? '.bad' : ''), r.meds ? days(r.meds.days) : '—', r.meds ? h('small', 'DAYS') : null))),
-    h('div', { style: 'margin-top:12px' },
+    h('div',
       kv(fromPlan ? 'HOUSEHOLD' : 'GROUP SIZE', group),
       kv('ITEMS TRACKED', r.count),
       kv('EXPIRED', r.expired, r.expired ? 'bad' : 'dim'),
@@ -134,7 +243,7 @@ function dataPanel() {
       const table = (title, rep) => [h('div.lbl', { style: 'margin:10px 0 4px' }, title),
         h('div.scroll-x', h('table.t', h('thead', h('tr', h('th', ''), ['ADD', 'UPDATE', 'SKIP', 'REMOVE', 'INVALID'].map((x) => h('th.num', x)))), h('tbody', Object.entries(rep.collections).map(line)))),
         h('p.hint', `Plan: ${rep.plan}. Settings: ${rep.settings}.`)];
-      report.replaceChildren(
+      fill(report,
         h('p.hint', `Backup of ${backup.node?.callsign || 'a node'}, made ${String(backup.created || '').slice(0, 16).replace('T', ' ')}.`),
         ...table('MERGE', merge), ...table('REPLACE', replace),
         h('div.row', h('button.btn', { onclick: apply('merge') }, 'MERGE'), h('button.btn.danger', { onclick: apply('replace') }, 'REPLACE')));
@@ -146,7 +255,7 @@ function dataPanel() {
     const snaps = await api('/api/snapshots').catch(() => []);
     const last = state.settings?.lastBackup;
     const stale = !last || Date.now() - Date.parse(last) > 30 * 864e5;
-    body.replaceChildren(
+    fill(body, 
       kv('LAST DOWNLOADED BACKUP', ago(last), stale ? 'warn' : 'ok'),
       h('div.row', { style: 'margin:10px 0' },
         h('a.btn.primary', { href: '/api/backup', download: '', style: 'text-decoration:none', onclick: () => setTimeout(() => api('/api/settings').then((v) => { state.settings = v; }, () => {}), 1500) }, 'DOWNLOAD BACKUP')),
@@ -221,32 +330,62 @@ function accessRows(a, lanMode) {
   return [kv('THIS DEVICE', 'GUEST', 'warn'), h('p.hint', 'Enter the PIN to see and change notes, supplies, waypoints and the home position.'), pinForm()];
 }
 
+const FOLD_KEY = 'shelter.command.system';
+/** The system meters and links, folded below the situation. Open or closed is remembered on this device. */
+function systemFold(guest, summary, ...panels) {
+  let open = guest;
+  try { open = (localStorage.getItem(FOLD_KEY) ?? String(guest)) === 'true'; } catch { /* storage unavailable */ }
+  const fold = h('details.sys-fold', { open }, h('summary', h('span', 'SYSTEM AND LINKS'), summary), h('div.grid', panels));
+  fold.addEventListener('toggle', () => {
+    try { localStorage.setItem(FOLD_KEY, String(fold.open)); } catch { /* storage unavailable */ }
+  });
+  return fold;
+}
+
 export async function render(root, _arg, { code } = {}) {
   const guest = isGuest();
   const get = (u, fallback) => (guest ? fallback : api(u).catch(() => fallback));
-  const [index, stores, people, kits, contacts, planDoc] = await Promise.all([api('/api/manual').catch(() => []),
-    get('/api/db/stores', []), get('/api/db/people', []), get('/api/db/kits', []), get('/api/db/contacts', []), get('/api/plan', null)]);
+  const [index, stores, people, kits, contacts, planDoc, saved] = await Promise.all([api('/api/manual').catch(() => []),
+    get('/api/db/stores', []), get('/api/db/people', []), get('/api/db/kits', []), get('/api/db/contacts', []), get('/api/plan', null), get('/api/checkin', null)]);
   const sysBody = h('div.pb'), linkBody = h('div.pb'), posBody = h('div.pb'), readyBody = h('div.pb'), accessBody = h('div.pb');
-  const planBody = h('div.pb', planDoc ? planRows(completeness(planDoc, people, contacts)) : h('div.empty', 'NO PLAN'));
-  const kitsDue = kits.filter((k) => overdue(k)).length;
-  const banner = h('div');
+  const sitBody = h('div.pb'), powerBody = h('div.pb'), sysSummary = h('span.dim');
+  const planCheck = planDoc ? completeness(planDoc, people, contacts) : null;
+  const planBody = h('div.pb', planCheck ? planRows(planCheck) : h('div.empty', 'NO PLAN'));
+  const kitInfo = kitStatus(kits);
+  const banner = h('div'), powerBanner = h('div');
   let accessKey = '';
+
+  function paintPower(s) {
+    const p = s.power ? { ...s.power, lowPower: !!state.settings?.power?.lowPower } : null;
+    fill(powerBody, powerRows(p, guest));
+    const text = batteryBanner(p);
+    if (!text) { powerBanner.replaceChildren(); return; }
+    fill(powerBanner, h('div.banner.power-banner', h('b', 'ON BATTERY'), text,
+      p.lowPower || guest ? null : h('button.btn.sm', { type: 'button', style: 'margin-left:10px', onclick: () => switchLowPower(true) }, 'LOW-POWER MODE')));
+  }
 
   function paint() {
     const s = state.status;
     if (!s) { sysBody.replaceChildren(h('div.empty', 'NO TELEMETRY')); return; }
-    sysBody.replaceChildren(...systemRows(s.system));
-    linkBody.replaceChildren(...linkRows(s));
-    posBody.replaceChildren(...positionRows(home(), new Date()));
-    const household = people.length ? people : state.settings?.people;
-    readyBody.replaceChildren(...readinessRows(readiness(stores, household, { warnDays: state.settings?.expiryWarnDays || 90 }), kitsDue, people.length > 0));
+    fill(sysBody, systemRows(s.system));
+    fill(linkBody, linkRows(s));
+    sysSummary.textContent = `CPU ${Math.round(s.system.cpu * 100)}% · MEM ${bytes(s.system.memTotal - s.system.memFree)} · ${uplinkText(s.net)}`;
+    paintPower(s);
+    if (!guest) {
+      const now = new Date();
+      fill(posBody, positionRows(home(), now));
+      const household = people.length ? people : state.settings?.people;
+      const ready = readiness(stores, household, { warnDays: state.settings?.expiryWarnDays || 90 });
+      fill(readyBody, readinessRows(ready, kitInfo.due, people.length > 0));
+      fill(sitBody, situationRows(ready, kitInfo, attention({ planCheck, kits, ready }), home(), now));
+    }
     // The access panel holds forms, so it is redrawn only when access itself changes.
     const a = access();
     const key = `${a.role}|${a.lanWrites}|${a.pinSet}|${s.server.lanMode}`;
     if (key === accessKey) return;
     accessKey = key;
-    accessBody.replaceChildren(...accessRows(a, s.server.lanMode));
-    banner.replaceChildren(a.role === 'host' && s.server.lanMode && a.lanWrites === 'open'
+    fill(accessBody, accessRows(a, s.server.lanMode));
+    fill(banner, a.role === 'host' && s.server.lanMode && a.lanWrites === 'open'
       ? h('div.banner', { style: 'margin-bottom:14px' }, h('b', 'NOTICE'), 'Any device on your network can see and change household data. Set a PIN under Access below.')
       : '');
   }
@@ -264,30 +403,32 @@ export async function render(root, _arg, { code } = {}) {
       h('a.btn', { href: `#/manual/${pick.id}`, style: 'text-decoration:none;display:inline-block' }, 'OPEN ENTRY'),
     ] : h('div.empty', 'NO MANUAL ENTRIES LOADED'));
 
-  // Guests see no household data: no position, readiness or configuration.
+  // Guests see no household data: no situation, check-in, position, readiness or configuration.
   const panels = guest
     ? [
-      panel('SYSTEM', 'SYS-01', sysBody, 's4'),
-      panel('LINKS', 'NET-02', linkBody, 's4'),
+      panel('POWER', 'PWR-11', powerBody, 's4'),
       panel('ACCESS', 'ACC-07', accessBody, 's4'),
-      panel('FIELD BRIEF', 'MAN-04', brief, 's12'),
+      panel('FIELD BRIEF', 'MAN-04', brief, 's4'),
     ]
     : [
-      panel('SYSTEM', 'SYS-01', sysBody, 's4'),
-      panel('LINKS', 'NET-02', linkBody, 's4'),
+      panel('SITUATION', 'SIT-00', sitBody, 's8'),
+      panel('CHECK-IN', 'HSE-10', checkinPanel(people, saved), 's4'),
+      panel('POWER', 'PWR-11', powerBody, 's4'),
       panel('POSITION', 'POS-03', posBody, 's4'),
+      panel('PLAN', 'PLN-08', planBody, 's4'),
       panel('FIELD BRIEF', 'MAN-04', brief, 's7'),
       panel('READINESS', 'SUP-05', readyBody, 's5'),
-      panel('PLAN', 'PLN-08', planBody, 's4'),
       isHost() ? panel('DATA', 'BAK-09', dataPanel(), 's8') : null,
-      panel('CONFIGURATION', 'CFG-06', configForm(), 's8'),
       panel('ACCESS', 'ACC-07', accessBody, 's4'),
+      panel('CONFIGURATION', 'CFG-06', [configForm(), modelTools()], 's12'),
     ].filter(Boolean);
 
   root.append(
-    viewHeader(code, 'COMMAND', 'Node status, position and readiness at a glance.'),
+    viewHeader(code, 'COMMAND', guest ? 'Node status at a glance.' : 'The situation at a glance: supplies, household, power and plan.'),
+    powerBanner,
     banner,
-    h('div.grid', panels));
+    h('div.grid', panels),
+    systemFold(guest, sysSummary, panel('SYSTEM', 'SYS-01', sysBody, 's6'), panel('LINKS', 'NET-02', linkBody, 's6')));
 
   paint();
   return onStatus(paint);
