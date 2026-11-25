@@ -1,4 +1,4 @@
-// Host telemetry: CPU, memory, disk, LAN addresses and an uplink probe.
+// Host telemetry: CPU, memory, disk, LAN addresses and an uplink probe. Low-power mode samples less often.
 import os from 'node:os';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -15,12 +15,12 @@ function snapshot() {
   return { idle, total };
 }
 
-setInterval(() => {
+function sample() {
   const now = snapshot();
   const dt = now.total - last.total;
   if (dt > 0) cpuLoad = 1 - (now.idle - last.idle) / dt;
   last = now;
-}, 2000).unref();
+}
 
 // Uplink probe: a bare TCP connect, no payload. Disable with SHELTER_NET_CHECK=off.
 const uplink = { online: false, checkedAt: null, enabled: process.env.SHELTER_NET_CHECK !== 'off' };
@@ -32,7 +32,30 @@ function probe() {
   sock.once('timeout', () => done(false));
   sock.once('error', () => done(false));
 }
-if (uplink.enabled) { probe(); setInterval(probe, 60_000).unref(); }
+
+/** Sampling rates in ms, normally and in low-power mode. */
+export const SAMPLE_EVERY = { normal: { cpu: 2000, uplink: 60_000 }, low: { cpu: 60_000, uplink: 300_000 } };
+const timers = { cpu: null, uplink: null };
+let lowPower = null;
+
+/** Sets how often the CPU sampler and the uplink probe run. Low-power mode slows both down. */
+export function setLowPower(on) {
+  if (lowPower === !!on) return;
+  lowPower = !!on;
+  const every = lowPower ? SAMPLE_EVERY.low : SAMPLE_EVERY.normal;
+  clearInterval(timers.cpu);
+  timers.cpu = setInterval(sample, every.cpu);
+  timers.cpu.unref();
+  if (uplink.enabled) {
+    clearInterval(timers.uplink);
+    timers.uplink = setInterval(probe, every.uplink);
+    timers.uplink.unref();
+  }
+}
+export const isLowPower = () => !!lowPower;
+
+setLowPower(false);
+if (uplink.enabled) probe();
 
 export function systemStatus(dataDir) {
   let disk = null;
@@ -51,7 +74,7 @@ export function systemStatus(dataDir) {
     system: {
       host: process.env.SHELTER_HOSTNAME || os.hostname(), platform: `${os.type()} ${os.release()}`, arch: os.arch(), node: process.version,
       uptime: os.uptime(), cores: os.cpus().length, cpu: +cpuLoad.toFixed(3),
-      memTotal: os.totalmem(), memFree: os.freemem(), disk, lan,
+      memTotal: os.totalmem(), memFree: os.freemem(), disk, lan, lowPower: isLowPower(),
     },
     net: { ...uplink },
   };

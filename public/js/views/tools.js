@@ -1,5 +1,6 @@
 // 05 TOOLS — field calculators that work with no link.
-import { h, api, home, viewHeader, panel, kv, field, hhmm, toast } from '../lib/core.js';
+import { h, api, home, viewHeader, panel, kv, field, hhmm, toast, state, saveSettings, isGuest } from '../lib/core.js';
+import { powerBudget, DEVICE_PRESETS, ampHoursToWh, runtimeText } from '../lib/power.js';
 import { parseCoord, toDMS, toMGRS, formatUTM, rangeBearing, compassPoint, sunTimes, moonPhase } from '../lib/geo.js';
 
 let active = 'coord';
@@ -235,7 +236,98 @@ function codec() {
         h('span.hint', 'ROT13 and Caesar are obfuscation, not security.'))), 's6'));
 }
 
-const TOOLS = [['coord', 'COORDINATES', coord], ['sun', 'SUN / MOON', sun], ['morse', 'MORSE', morse], ['water', 'WATER', water], ['pace', 'PACE / BEARING', pace], ['codec', 'CODEC', codec]];
+// ---------- power budget ----------
+const fixed = (x, d = 0) => (Number.isFinite(x) ? x.toFixed(d) : '—');
+const wh = (x) => (Math.abs(x) >= 10_000 ? `${fixed(x / 1000, 1)} KWH` : `${fixed(x)} WH`);
+
+/** One device row in the budget table; edits change the device in place and recalculate. */
+function deviceRow(d, onChange, onRemove) {
+  const cell = (k, attrs) => {
+    const el = h('input', { value: d[k] ?? '', 'aria-label': k, ...attrs });
+    el.addEventListener('input', () => { d[k] = attrs.type === 'number' ? num(el) : el.value; onChange(); });
+    return h('td', el);
+  };
+  return h('tr',
+    cell('name', { maxlength: 40 }),
+    cell('watts', { type: 'number', min: 0, step: 'any', style: 'width:80px' }),
+    cell('hours', { type: 'number', min: 0, max: 24, step: 'any', style: 'width:70px' }),
+    cell('qty', { type: 'number', min: 1, max: 999, style: 'width:60px' }),
+    h('td', h('button.btn.sm.danger', { type: 'button', onclick: onRemove, 'aria-label': `Remove ${d.name}` }, 'DEL')));
+}
+
+function powerBudgetResults(b) {
+  let withSolar = 'NO LOAD';
+  if (b.drawWh > 0) withSolar = b.autonomyDays === null ? 'INDEFINITELY' : `${fixed(b.autonomyDays, 1)} DAYS`;
+  return [
+    h('div.stat-row',
+      h('div.stat', h('div.lbl', 'DAILY USE'), h('div.big', fixed(b.drawWh), h('small', 'WH'))),
+      h('div.stat', h('div.lbl', 'NET / DAY'), h('div.big' + (b.netWh < 0 ? '.warn' : '.ok'), (b.netWh > 0 ? '+' : '') + fixed(b.netWh), h('small', 'WH')))),
+    h('div', { style: 'margin-top:12px' },
+      kv('LOAD (AT THE DEVICES)', `${wh(b.loadWh)} · AVG ${fixed(b.averageW, 1)} W`),
+      kv('USABLE BATTERY', wh(b.usableWh)),
+      kv('SOLAR (DERATED)', `${wh(b.solarWh)} / DAY`),
+      kv('NO SUN: BATTERY LASTS', b.darkHours === null ? '—' : runtimeText(b.darkHours * 60)),
+      kv('WITH THIS SOLAR', withSolar, b.autonomyDays === null ? 'ok' : 'warn'),
+      kv('PANEL TO COVER THE LOAD', b.solarNeededW === null ? '—' : `${fixed(b.solarNeededW)} W`)),
+    b.devices.length ? h('div', { style: 'margin-top:12px' }, b.devices.filter((d) => d.wh > 0).sort((x, y) => y.wh - x.wh).map((d) =>
+      h('div.meter', h('div.row', h('span', String(d.name || 'DEVICE').toUpperCase()), h('b', `${fixed(d.wh)} WH · ${Math.round(d.share * 100)}%`)),
+        h('div.track', h('div.fill', { style: `width:${(d.share * 100).toFixed(1)}%` }))))) : null,
+  ];
+}
+
+function power() {
+  const saved = state.settings?.power || {};
+  const devices = (saved.devices?.length ? saved.devices : DEVICE_PRESETS.slice(0, 3)).map((d) => ({ qty: 1, ...d }));
+  const f = {
+    battery: h('input', { type: 'number', min: 0, step: 'any', value: saved.batteryWh ?? 1000 }),
+    usable: h('input', { type: 'number', min: 10, max: 100, value: saved.usablePct ?? 80 }),
+    eff: h('input', { type: 'number', min: 50, max: 100, value: saved.efficiency ?? 90 }),
+    solar: h('input', { type: 'number', min: 0, step: 'any', value: saved.solarW ?? 0 }),
+    sunH: h('input', { type: 'number', min: 0, max: 24, step: 'any', value: saved.sunHours ?? 4 }),
+  };
+  const ah = h('input', { type: 'number', min: 0, step: 'any', placeholder: '100' }), volts = h('input', { type: 'number', min: 0, step: 'any', placeholder: '12' });
+  const tbody = h('tbody'), out = h('div');
+  const preset = h('select', { 'aria-label': 'Device' }, h('option', { value: '' }, 'CUSTOM DEVICE'), DEVICE_PRESETS.map((d, i) => h('option', { value: i }, `${d.name.toUpperCase()} · ${d.watts} W`)));
+  const calc = () => out.replaceChildren(...powerBudgetResults(powerBudget({
+    devices, batteryWh: num(f.battery), usablePct: num(f.usable), efficiency: num(f.eff), solarW: num(f.solar), sunHours: num(f.sunH),
+  })));
+  function table() {
+    tbody.replaceChildren(...devices.map((d, i) => deviceRow(d, calc, () => { devices.splice(i, 1); table(); calc(); })));
+  }
+  const add = () => {
+    const p = DEVICE_PRESETS[preset.value];
+    devices.push(p ? { ...p, qty: 1 } : { name: 'Device', watts: 10, hours: 1, qty: 1 });
+    table(); calc();
+  };
+  const fromAh = () => {
+    const v = ampHoursToWh(num(ah), num(volts));
+    if (v > 0) { f.battery.value = String(Math.round(v)); calc(); }
+  };
+  const save = async () => {
+    const list = devices.map((d) => ({ name: String(d.name || '').trim() || 'Device', watts: d.watts || 0, hours: Math.min(24, d.hours || 0), qty: Math.max(1, Math.round(d.qty || 1)) }));
+    try {
+      await saveSettings({ power: { devices: list, batteryWh: num(f.battery), usablePct: num(f.usable) ?? 80, efficiency: num(f.eff) ?? 90, solarW: num(f.solar), sunHours: num(f.sunH) ?? 4 } });
+      toast('POWER BUDGET SAVED');
+    } catch (error) { toast(error.message, true); }
+  };
+  live(Object.values(f), calc);
+  table();
+  return h('div.grid',
+    panel('LOADS', 'PWR-01', h('div.pb',
+      h('div.scroll-x', h('table.t.power-table', h('thead', h('tr', ['DEVICE', 'WATTS', 'HOURS / DAY', 'QTY', ''].map((x) => h('th', x)))), tbody)),
+      h('div.row', { style: 'margin-top:10px;flex-wrap:nowrap' }, preset, h('button.btn', { type: 'button', onclick: add }, 'ADD')),
+      h('p.hint', 'Watts from the label or a plug-in meter. Fridges and freezers cycle: use the average draw, about a third of the rated figure.'),
+      h('div.lbl', { style: 'margin:14px 0 6px' }, 'BATTERY AND SOLAR'),
+      h('div.fr', field('BATTERY (WH)', f.battery), field('USABLE %', f.usable), field('EFFICIENCY %', f.eff)),
+      h('div.fr', field('AMP-HOURS', ah), field('VOLTS', volts), h('label.f', h('span', ' '), h('button.btn', { type: 'button', onclick: fromAh }, 'USE AH × V'))),
+      h('div.fr', field('SOLAR PANELS (W)', f.solar), field('PEAK SUN HOURS', f.sunH)),
+      h('p.hint', 'Usable: about 80% for lithium, 50% for lead-acid. Efficiency covers the inverter and wiring; use 100 for DC loads. Peak sun hours: 1–2 in winter at high latitudes, 4–6 in summer.'),
+      isGuest() ? h('p.hint', 'Enter the PIN on Command to save this budget.') : h('div.row', h('button.btn.primary', { type: 'button', onclick: save }, 'SAVE BUDGET'))), 's7'),
+    panel('BALANCE', 'PWR-02', h('div.pb', out,
+      h('p.hint', { style: 'margin-top:10px' }, 'Solar output is taken at 75% of the panel rating for heat, dust and angle. See the manual chapter on power and electricity.')), 's5'));
+}
+
+const TOOLS = [['coord', 'COORDINATES', coord], ['sun', 'SUN / MOON', sun], ['morse', 'MORSE', morse], ['water', 'WATER', water], ['pace', 'PACE / BEARING', pace], ['power', 'POWER BUDGET', power], ['codec', 'CODEC', codec]];
 
 export function render(root, arg, { code } = {}) {
   if (TOOLS.some(([id]) => id === arg)) active = arg;
@@ -246,7 +338,7 @@ export function render(root, arg, { code } = {}) {
     tabs.replaceChildren(...TOOLS.map(([id, label]) => h('button', { role: 'tab', class: id === active ? 'active' : null, onclick: () => { active = id; show(); } }, label)));
     body.replaceChildren(TOOLS.find(([id]) => id === active)[2]());
   }
-  root.append(viewHeader(code, 'TOOLS', 'Calculators for navigation, signalling and water. All computed on this device.'), tabs, body);
+  root.append(viewHeader(code, 'TOOLS', 'Calculators for navigation, signalling, water and power. All computed on this device.'), tabs, body);
   show();
   return stopAudio;
 }

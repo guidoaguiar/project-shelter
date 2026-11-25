@@ -2,10 +2,13 @@
 // from street map archives stored on this node. Waypoints, range and bearing from home.
 import { h, api, saveSettings, home, toast, viewHeader, panel, kv, bytes, isGuest, printDoc, printButton } from '../lib/core.js';
 import { MEETING, routeLegs } from '../lib/plan.js';
-import { gpx, download, today } from '../lib/export.js';
 import { toMGRS, toDMS, rangeBearing, compassPoint, parseCoord } from '../lib/geo.js';
+import { CATEGORIES, kindOf, kindLabel, kindShort, filterByKind, countByKind } from '../lib/waypoints.js';
+import { mapRoutes } from './parts/map-routes.js';
+import { paintWaypoints, hitTest } from './parts/map-draw.js';
 import { StreetLayer, mercY, invMercY, MAX_LAT, countTiles } from '../lib/streets.js';
 import { worldRings } from '../lib/world.js';
+import { locateButton } from '../lib/locate.js';
 
 let world = null; // Path2D in (lon, -mercY(lat)) space, built once
 
@@ -97,13 +100,25 @@ export async function render(root, arg, { code } = {}) {
     h('div.map-ctl',
       h('button.btn', { title: 'Zoom in', onclick: () => zoom(1.6) }, '+'),
       h('button.btn', { title: 'Zoom out', onclick: () => zoom(1 / 1.6) }, '−'),
-      h('button.btn', { title: 'Centre on home position', onclick: () => goHome() }, '⌂')));
+      h('button.btn', { title: 'Centre on home position', onclick: () => goHome() }, '⌂'),
+      locateButton((p) => { mark = { lat: p.lat, lon: p.lon }; centreOn(mark, 40); paintSide(); })));
   const side = h('div');
   const ctx = canvas.getContext('2d');
   let W = 0, H = 0;
 
   const streets = new StreetLayer(() => draw());
   streets.setArchives(mapInfo.archives);
+  const shown = new Set(); // waypoint categories to show; empty shows all
+  // Routes, tracks, GPX and search (IMPROVEMENTS 2.3) live in parts/map-routes.js.
+  const rt = mapRoutes({
+    get waypoints() { return waypoints; }, set waypoints(v) { waypoints = v; },
+    get mark() { return mark; }, set mark(v) { mark = v; },
+    get planDoc() { return planDoc; }, set planDoc(v) { planDoc = v; },
+    centre: () => ({ lat: view.lat, lon: view.lon }),
+    draw: () => draw(), fit: (b) => fit(b), centreOn: (p, s) => centreOn(p, s), paintSide: () => paintSide(),
+    streets,
+  });
+  await rt.load();
 
   const toXY = (lon, lat) => [W / 2 + (lon - view.lon) * view.scale, H / 2 - (mercY(lat) - mercY(view.lat)) * view.scale];
   const toLL = (x, y) => ({ lon: view.lon + (x - W / 2) / view.scale, lat: invMercY(mercY(view.lat) - (y - H / 2) / view.scale) });
@@ -218,22 +233,17 @@ export async function render(root, arg, { code } = {}) {
 
   /** Waypoints, home, the selected point, and a range line from home to it. */
   function paintMarks(c, label) {
-    const accent = c('--accent'), text = c('--text'), bg = c('--bg');
+    const accent = c('--accent');
     const pos = home();
     ctx.font = '10px ui-monospace, Consolas, monospace';
     paintPlan(c, label);
+    rt.paint(ctx, toXY, c, label);
     if (pos && mark) {
       const [x1, y1] = toXY(pos.lon, pos.lat), [x2, y2] = toXY(mark.lon, mark.lat);
       ctx.strokeStyle = accent; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.setLineDash([]);
     }
     ctx.lineJoin = 'round';
-    for (const w of waypoints) {
-      const [x, y] = toXY(w.lon, w.lat);
-      ctx.fillStyle = bg; ctx.beginPath(); ctx.moveTo(x, y - 6); ctx.lineTo(x + 6, y); ctx.lineTo(x, y + 6); ctx.lineTo(x - 6, y); ctx.closePath(); ctx.fill();
-      ctx.strokeStyle = text; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(x, y - 5); ctx.lineTo(x + 5, y); ctx.lineTo(x, y + 5); ctx.lineTo(x - 5, y); ctx.closePath(); ctx.stroke();
-      label(String(w.name).toUpperCase(), x + 9, y + 3, text);
-    }
+    paintWaypoints(ctx, filterByKind(waypoints, shown), toXY, c, label, mark?.id);
     if (pos) {
       const [x, y] = toXY(pos.lon, pos.lat);
       ctx.fillStyle = accent; ctx.beginPath(); ctx.moveTo(x, y - 7); ctx.lineTo(x + 6, y + 5); ctx.lineTo(x - 6, y + 5); ctx.closePath(); ctx.fill();
@@ -375,27 +385,44 @@ export async function render(root, arg, { code } = {}) {
     } catch (error) { toast(error.message, true); }
   }
 
-  /** Save-as-waypoint and set-as-home controls for the marked point. Guests get a hint instead. */
+  const categorySelect = (value) => h('select', { 'aria-label': 'Waypoint category', value }, CATEGORIES.map(([k, label]) => h('option', { value: k }, label)));
+
+  /** Save-as-waypoint (or edit a selected waypoint), add-to-route and set-as-home controls for the marked point. Guests get a hint instead. */
   function markActions() {
     const clear = h('button.btn.ghost', { onclick: () => { mark = null; paintSide(); draw(); } }, 'CLEAR');
     if (isGuest()) {
       return [h('p.hint', { style: 'margin-top:10px' }, 'Enter the PIN on Command to save waypoints or set the home position.'), h('div.row', clear)];
     }
-    const name = h('input', { placeholder: 'WAYPOINT NAME', maxlength: 40 });
+    const saved = mark.id ? waypoints.find((w) => w.id === mark.id) : null;
+    const name = h('input', { placeholder: 'WAYPOINT NAME', maxlength: 60, value: saved?.name || mark.poi || '', 'aria-label': 'Waypoint name' });
+    const kind = categorySelect(saved ? kindOf(saved) : mark.kind || 'other');
+    const note = h('input', { placeholder: 'NOTE', maxlength: 500, value: saved?.note || '', 'aria-label': 'Waypoint note' });
     let forPlan = null;
     if (pick) {
       const label = pick.kind === 'meeting' ? `USE AS MEETING PLACE: ${pick.label}` : 'ADD TO THE ROUTE';
       forPlan = h('div.row', { style: 'margin-top:10px' }, h('button.btn.primary', { type: 'button', onclick: () => usePick(name.value.trim()) }, label));
     }
+    const submit = async (e) => {
+      e.preventDefault();
+      const body = { name: name.value.trim() || `WPT ${waypoints.length + 1}`, kind: kind.value, note: note.value.trim() };
+      try {
+        if (saved) {
+          const w = await api(`/api/db/waypoints/${saved.id}`, { method: 'PUT', body });
+          waypoints = waypoints.map((x) => (x.id === w.id ? w : x));
+          toast('WAYPOINT SAVED');
+        } else {
+          const w = await api('/api/db/waypoints', { method: 'POST', body: { ...body, lat: +mark.lat.toFixed(6), lon: +mark.lon.toFixed(6) } });
+          waypoints = [...waypoints, w];
+        }
+        mark = null; paintSide(); draw();
+      } catch (error) { toast(error.message, true); }
+    };
     return [
       forPlan,
-      h('form', { style: 'margin-top:10px', onsubmit: async (e) => {
-        e.preventDefault();
-        try {
-          const w = await api('/api/db/waypoints', { method: 'POST', body: { name: name.value.trim() || `WPT ${waypoints.length + 1}`, lat: +mark.lat.toFixed(6), lon: +mark.lon.toFixed(6) } });
-          waypoints = [...waypoints, w]; mark = null; paintSide(); draw();
-        } catch (error) { toast(error.message, true); }
-      } }, h('div.row', { style: 'flex-wrap:nowrap' }, name, h('button.btn.primary', 'SAVE'))),
+      rt.markAction(name, kind),
+      h('form', { style: 'margin-top:10px', onsubmit: submit },
+        h('div', { style: 'display:grid;gap:6px' }, name, h('div.row', { style: 'flex-wrap:nowrap' }, kind, note)),
+        h('div.row', { style: 'margin-top:6px' }, h('button.btn.primary', saved ? 'SAVE CHANGES' : 'SAVE WAYPOINT'))),
       h('div.row', { style: 'margin-top:8px' },
         h('button.btn', { onclick: async () => {
           try { await saveSettings({ lat: +mark.lat.toFixed(6), lon: +mark.lon.toFixed(6) }); toast('HOME POSITION SET'); mark = null; paintSide(); draw(); } catch (error) { toast(error.message, true); }
@@ -404,44 +431,81 @@ export async function render(root, arg, { code } = {}) {
     ];
   }
 
+  /** Selects a saved waypoint: it becomes the marked point, with its edit form under Selected point. */
+  function selectWaypoint(w, minScale = 20) {
+    mark = { lat: +w.lat, lon: +w.lon, id: w.id, name: w.name };
+    centreOn(mark, minScale);
+    paintSide();
+  }
+
+  /** Category filter: one toggle per category in use; none pressed shows every waypoint. */
+  function kindFilter() {
+    const counts = countByKind(waypoints);
+    const used = CATEGORIES.filter(([k]) => counts[k] > 0);
+    if (used.length < 2) return null;
+    const toggle = (k) => {
+      if (shown.has(k)) shown.delete(k);
+      else shown.add(k);
+      paintSide(); draw();
+    };
+    return h('div.pb.wpt-filter', h('div.row',
+      h('button.btn.sm' + (shown.size ? '' : '.on'), { type: 'button', 'aria-pressed': String(!shown.size), onclick: () => { shown.clear(); paintSide(); draw(); } }, 'ALL'),
+      used.map(([k]) => h('button.btn.sm' + (shown.has(k) ? '.on' : ''), { type: 'button', 'aria-pressed': String(shown.has(k)), title: kindLabel(k), onclick: () => toggle(k) }, `${kindShort(k)} ${counts[k]}`))));
+  }
+
+  function waypointRow(w) {
+    const remove = async () => {
+      if (!confirm(`Delete the waypoint "${w.name}"? It is also taken out of routes and the plan.`)) return;
+      try {
+        await api(`/api/db/waypoints/${w.id}`, { method: 'DELETE' });
+        waypoints = waypoints.filter((x) => x.id !== w.id);
+        if (mark?.id === w.id) mark = null;
+        await rt.load(); // the server took the waypoint out of routes
+        paintSide(); draw();
+      } catch (error) { toast(error.message, true); }
+    };
+    return h('tr' + (mark?.id === w.id ? '.on' : ''),
+      h('td', h('div', h('span.tag.wpt-kind', { 'data-kind': kindOf(w), title: kindLabel(kindOf(w)) }, kindShort(kindOf(w))), ' ', String(w.name).toUpperCase()), h('div.hint', fromHome(w))),
+      h('td.num', h('div.row', { style: 'justify-content:flex-end;flex-wrap:nowrap' },
+        h('button.btn.sm', { title: 'Centre the map here and select it', onclick: () => selectWaypoint(w) }, 'GO'),
+        isGuest() ? null : h('button.btn.sm.danger', { title: 'Delete waypoint', onclick: remove }, 'DEL'))));
+  }
+
   function paintSide() {
+    const what = mark?.id ? String(mark.name || 'WAYPOINT').toUpperCase() : mark?.poi?.toUpperCase();
+    const whatRow = what ? kv('POINT', what) : null;
     const markPanel = mark ? h('div.pb',
+      whatRow,
       kv('LAT / LON', fmt(mark)), kv('DMS', toDMS(mark.lat, mark.lon)), kv('MGRS', toMGRS(mark.lat, mark.lon, 4) || 'POLAR'),
       kv('FROM HOME', fromHome(mark)),
       markActions())
-      : h('div.pb', h('div.empty', 'NO POINT SELECTED'), h('p.hint', 'Type coordinates above or click the map to mark a point, then save it as a waypoint or set it as your home position.'));
+      : h('div.pb', h('div.empty', 'NO POINT SELECTED'), h('p.hint', 'Type coordinates above or click the map to mark a point (or click a waypoint to select it), then save it as a waypoint, add it to a route or set it as your home position.'));
 
-    const noWaypoints = isGuest() ? 'WAYPOINTS NEED THE PIN' : 'NO WAYPOINTS';
-    const list = waypoints.length ? h('div.scroll-x', h('table.t', h('tbody', waypoints.map((w) => h('tr',
-      h('td', h('div', String(w.name).toUpperCase()), h('div.hint', fromHome(w))),
-      h('td.num', h('div.row', { style: 'justify-content:flex-end;flex-wrap:nowrap' },
-        h('button.btn.sm', { title: 'Centre map here', onclick: () => centreOn(w, 20) }, 'GO'),
-        h('button.btn.sm.danger', { title: 'Delete waypoint', onclick: async () => {
-          try { await api(`/api/db/waypoints/${w.id}`, { method: 'DELETE' }); waypoints = waypoints.filter((x) => x.id !== w.id); paintSide(); draw(); } catch (error) { toast(error.message, true); }
-        } }, 'DEL'))))))))
+    let noWaypoints = isGuest() ? 'WAYPOINTS NEED THE PIN' : 'NO WAYPOINTS';
+    if (waypoints.length) noWaypoints = 'NONE IN THESE CATEGORIES';
+    const visible = filterByKind(waypoints, shown);
+    const list = visible.length ? h('div.scroll-x.wpt-list', h('table.t', h('tbody', visible.map(waypointRow))))
       : h('div.empty', noWaypoints);
-    const tools = !isGuest() && waypoints.length ? h('div.pb', h('div.row',
-      h('button.btn.ghost', { type: 'button', onclick: exportGpx }, 'EXPORT GPX'), printButton(printWaypoints))) : null;
+    const tools = !isGuest() && waypoints.length ? h('div.pb', h('div.row', printButton(printWaypoints))) : null;
 
     side.replaceChildren(
       entry,
       h('div', { style: 'height:14px' }),
+      rt.searchPanel(),
+      h('div', { style: 'height:14px' }),
       panel('SELECTED POINT', 'MRK', markPanel),
       h('div', { style: 'height:14px' }),
-      panel('WAYPOINTS', String(waypoints.length).padStart(2, '0'), h('div', h('div.pb.flush', list), tools)),
+      panel('WAYPOINTS', String(waypoints.length).padStart(2, '0'), h('div', kindFilter(), h('div.pb.flush', list), tools)),
+      h('div', { style: 'height:14px' }),
+      rt.routesPanel(),
       h('div', { style: 'height:14px' }),
       mapsBox);
   }
 
-  function exportGpx() {
-    const routes = (planDoc?.routes || []).map((r) => ({ name: r.name, points: routeLegs(r, waypoints).points }));
-    download(`shelter-waypoints-${today()}.gpx`, gpx(waypoints, routes), 'application/gpx+xml');
-  }
-
   function printWaypoints() {
     printDoc('WAYPOINTS',
-      h('table.t', h('thead', h('tr', ['NAME', 'LAT, LON', 'MGRS', 'FROM HOME', 'NOTE'].map((x) => h('th', x)))),
-        h('tbody', waypoints.map((w) => h('tr', h('td', w.name), h('td', `${(+w.lat).toFixed(5)}, ${(+w.lon).toFixed(5)}`), h('td', toMGRS(w.lat, w.lon, 5) || '—'), h('td', fromHome(w)), h('td', w.note || ''))))),
+      h('table.t', h('thead', h('tr', ['NAME', 'TYPE', 'LAT, LON', 'MGRS', 'FROM HOME', 'NOTE'].map((x) => h('th', x)))),
+        h('tbody', filterByKind(waypoints, shown).map((w) => h('tr', h('td', w.name), h('td', kindLabel(kindOf(w))), h('td', `${(+w.lat).toFixed(5)}, ${(+w.lon).toFixed(5)}`), h('td', toMGRS(w.lat, w.lon, 5) || '—'), h('td', fromHome(w)), h('td', w.note || ''))))),
       h('p.hint', 'Bearings are true, not magnetic.'));
   }
 
@@ -484,8 +548,11 @@ export async function render(root, arg, { code } = {}) {
       return;
     }
     if (e.type === 'pointerup' && drag && !drag.moved) {
-      const p = toLL(...local(e));
-      if (Math.abs(p.lat) <= MAX_LAT && Math.abs(p.lon) <= 180) { mark = p; paintSide(); draw(); }
+      const [x, y] = local(e);
+      const w = hitTest(filterByKind(waypoints, shown), toXY, x, y);
+      const p = toLL(x, y);
+      if (w) selectWaypoint(w, view.scale);
+      else if (Math.abs(p.lat) <= MAX_LAT && Math.abs(p.lon) <= 180) { mark = p; paintSide(); draw(); }
     }
     drag = null;
   };

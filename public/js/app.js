@@ -1,6 +1,8 @@
 // Shell: routing, top bar telemetry, display modes.
 import { h, api, state, onStatus, refreshStatus, home, toast, isGuest } from './lib/core.js';
 import { toMGRS } from './lib/geo.js';
+import { registerWorker } from './lib/offline.js';
+import { statusInterval } from './lib/power.js';
 
 const MODULES = [
   ['command', 'COMMAND'], ['plan', 'PLAN'], ['manual', 'MANUAL'], ['advisor', 'ADVISOR'], ['map', 'MAP'],
@@ -83,7 +85,8 @@ onStatus(() => {
     return;
   }
   led('led-net', s.net.online); led('led-ai', s.ai.online); led('led-dkr', s.docker.online);
-  $('status-left').textContent = `NODE ${s.system.host.toUpperCase()} // ${s.server.lanMode ? 'LAN MODE' : 'LOCAL ONLY'} // ${s.net.online ? 'UPLINK AVAILABLE' : 'OFF GRID'}`;
+  $('status-left').textContent = `NODE ${s.system.host.toUpperCase()} // ${s.server.lanMode ? 'LAN MODE' : 'LOCAL ONLY'} // ${s.net.online ? 'UPLINK AVAILABLE' : 'OFF GRID'}`
+    + (s.power?.onBattery ? ' // ON BATTERY' : '') + (s.power?.lowPower ? ' // LOW POWER' : '');
   $('status-right').textContent = `MANUAL ${s.manual.articles} ENTRIES // V${s.server.version}`;
 });
 
@@ -92,6 +95,19 @@ tick();
 setInterval(tick, 1000);
 try { state.settings = await api('/api/settings'); } catch (error) { toast(error.message, true); }
 await refreshStatus();
-setInterval(refreshStatus, 5000);
+// Status polling slows down in low-power mode (lib/power.js); the rate follows the saved setting.
+let pollTimer = null, pollEvery = 0;
+function schedulePoll() {
+  const every = statusInterval(state.settings);
+  if (every === pollEvery) return;
+  clearInterval(pollTimer);
+  pollEvery = every;
+  pollTimer = setInterval(refreshStatus, every);
+}
+schedulePoll();
+onStatus(schedulePoll);
 if (location.hash) await route();
 else location.hash = '#/command'; // the hashchange listener routes
+
+// ----- offline copy (service worker: app shell and manual; needs HTTPS or localhost) -----
+registerWorker();

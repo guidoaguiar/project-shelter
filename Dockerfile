@@ -2,7 +2,8 @@
 # through the host's Docker socket (mounted by compose.yaml).
 FROM node:22-alpine
 
-RUN apk add --no-cache docker-cli
+# openssl makes the self-signed certificate when HTTPS is on (SHELTER_HTTPS=1).
+RUN apk add --no-cache docker-cli openssl
 
 WORKDIR /app
 COPY . .

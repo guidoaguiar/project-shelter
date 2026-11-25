@@ -113,6 +113,7 @@ When the installer finishes, open http://localhost:4077. Shelter starts again on
 |---|---|---|
 | `--port N` | `-Port N` | Web interface port |
 | `--lan` / `--local` | `-Lan` / `-Local` | Serve your network, or this machine only |
+| `--https` | `-Https` | Serve over HTTPS with a self-signed certificate (see [Phones](#phones-gps-and-offline-use)) |
 | `--ai` / `--no-ai` | `-Ai` / `-NoAi` | Set up the local AI, or skip the question |
 | `--dir PATH` | `-Dir PATH` | Install somewhere else |
 | `--yes` | `-Yes` | Accept all defaults without asking |
@@ -152,6 +153,7 @@ For development. Requires Node.js 20 or newer. There are no dependencies to inst
 ```
 node server.js          # http://localhost:4077
 node server.js --lan    # also serve phones and tablets on your network
+node server.js --lan --https   # the same over HTTPS, so phones can use GPS and offline mode
 ```
 
 The Depot then uses the Docker CLI on the same machine, if there is one.
@@ -170,6 +172,15 @@ Model settings, the access setting and the PIN can only be changed on the host. 
 
 To set or change the PIN from a terminal on the host: `sudo shelter pin` (Linux), `~/Shelter/shelter pin` (macOS) or `docker exec -it shelter node server/pin.js` (Windows, or any Docker install). Add `--policy open|pin|readonly`, `--remove` or `--status`. Without Docker, run `node server/pin.js` while Shelter is running.
 
+### Phones: GPS and offline use
+
+Browsers only share a phone's GPS position, and only let a phone keep Shelter for offline use, over HTTPS (or on `localhost`). Turn on HTTPS with the installer's `--https` option, `SHELTER_HTTPS=1` in `.env`, or `node server.js --lan --https`.
+
+- Shelter makes a self-signed certificate with `openssl` the first time and keeps it in `<data>/tls`. It is remade when the machine's network address changes or it nears expiry. To use your own, set `SHELTER_TLS_KEY` and `SHELTER_TLS_CERT`. Without `openssl`, Shelter says so and serves plain HTTP.
+- Each phone warns about the certificate once. To trust it instead, open `https://<node>:4077/shelter.crt` on the phone and install it; the console shows its SHA-256 fingerprint to compare. Offline use needs the certificate trusted.
+- Old `http://` links from other devices are redirected to HTTPS on the same port. This machine can still use plain HTTP.
+- On the map, the **◎** button marks this device's position. **Add to Home Screen** (or **Install app**) installs Shelter; it then keeps the app and the whole manual, refreshed while it can reach the node. Household data, live status and map tiles are not kept on the phone.
+
 ### Platform notes
 
 - **Linux** runs Shelter with host networking, so it behaves like a native install. The Depot can tell the host machine apart from other devices, so its controls stay available on the host in network mode.
@@ -183,10 +194,10 @@ To set or change the PIN from a terminal on the host: `sudo shelter pin` (Linux)
 | 01 | Command | Host telemetry, link status, grid position, sun and moon, supply and plan readiness, backup and restore, access, configuration |
 | 02 | Plan | The household emergency plan: people and pets, contacts, meeting places and routes, sheltering in place and utility shut-offs, a review checklist, and printouts |
 | 03 | Manual | 270 entries in 15 sections, including household emergencies and first aid cards, with figures and ranked full-text search. Each section opens with short essentials, followed by full chapters |
-| 04 | Advisor | Chat with a local model, grounded in the manual and citing entries. With no model it returns the closest entries instead |
-| 05 | Map | World outline everywhere, plus downloadable street maps (roads, paths, tracks, water, buildings, key points) that work offline. Waypoints, plan routes and meeting places, range and bearing from home, GPX export |
+| 04 | Advisor | Chat with a local model, grounded in the manual and citing entries. With no model it returns the closest entries instead. The conversation is kept on the device and can be saved to the Log; optional household context and embedding search |
+| 05 | Map | World outline everywhere, plus downloadable street maps (roads, paths, tracks, water, buildings, key points) that work offline. Waypoints, plan routes and meeting places, range and bearing from home, GPX import and export, routes, offline place search, waypoint categories |
 | 06 | Tools | Coordinate conversion (DD, DMS, UTM, MGRS), sun and moon times, Morse with audio, water disinfection dosing, pace and bearing, encoding and hashing |
-| 07 | Log | Markdown notes saved on the node, exportable as one Markdown file |
+| 07 | Log | Markdown notes saved on the node, with tags, search and a date filter, templates (incident report, SITREP, daily check-in, radio log, medical observations) and photo attachments (JPEG, PNG, WebP or GIF up to 5 MB, 12 per entry, kept in `data/attachments` and included in backups up to 24 MB). Exportable as one Markdown file |
 | 08 | Stores | Supply inventory with days of water, food and medication, low-stock and expiry warnings, and kit checklists checked on a schedule |
 | 09 | Depot | Deploys 19 services as Docker containers, in six categories: knowledge (Kiwix, Kolibri, Calibre-Web, DokuWiki), AI (Ollama, Open WebUI), tools, vault, homestead and media. Each card links to where its content comes from |
 
@@ -194,13 +205,18 @@ The FIRST AID button in the top bar opens the first aid cards from any screen. T
 
 ## Local AI
 
-The Advisor talks to [Ollama](https://ollama.com). The installers can set it up for you. Otherwise, deploy Ollama from the Depot, or install it natively, then pull a model:
+The Advisor talks to [Ollama](https://ollama.com). The installers can set it up for you. Otherwise, deploy Ollama from the Depot, or install it natively, then pull a model on the host machine under Command, Configuration: type a name such as `llama3.2:3b`, press CHECK to see its size against this machine's memory and disk, then PULL MODEL. From a terminal the same is:
 
 ```
 docker exec shelter-ollama ollama pull llama3.2:3b
 ```
 
-The AI indicator in the top bar then turns on. On Linux with an NVIDIA GPU and the NVIDIA Container Toolkit, the installer gives Ollama the GPU.
+The AI indicator in the top bar then turns on.
+
+The Advisor keeps the conversation on each device until you clear it, and SAVE TO LOG turns it into a Log entry. Two options sit beside the pull button:
+
+- **Household context** (off by default): the Advisor is told the people, ages, allergies, conditions and medications from the household plan, so "what can my child with a peanut allergy eat?" gets a useful answer. It is only sent when the model server is on this machine or the local network, and only for devices that may see household data.
+- **Embedding model**: with one installed (for example `ollama pull nomic-embed-text`) the Advisor finds manual passages by meaning and keywords together. The manual is indexed once in the background (cached under `data/cache`); until then, and whenever the embedding model is unavailable, it uses keyword search. On Linux with an NVIDIA GPU and the NVIDIA Container Toolkit, the installer gives Ollama the GPU.
 
 The default address is `http://127.0.0.1:11434` on Linux and `http://host.docker.internal:11434` under Docker Desktop.
 
@@ -288,11 +304,14 @@ With Docker, set these in `.env` next to `compose.yaml` (see [.env.example](.env
 | `SHELTER_AI_URL` | see [Local AI](#local-ai) | Default model server address. A URL saved under Configuration takes precedence |
 | `SHELTER_NET_CHECK` | `1.1.1.1:443` | Host probed for uplink status. Set to `off` to disable |
 | `SHELTER_REMOTE_ADMIN` | `0` | Set to `1` to treat every device as the host in network mode: Depot control, model and access settings |
+| `SHELTER_HTTPS` | `0` | Set to `1` for HTTPS with a self-signed certificate (see [Phones](#phones-gps-and-offline-use)). `SHELTER_TLS_KEY` and `SHELTER_TLS_CERT` use your own |
 | `SHELTER_DEPOT_UID` | `1000` | Owner given to Depot service folders (`uid` or `uid:gid`, `off` to skip) |
 | `SHELTER_DEPOT_HOST_DIR` | unset | Docker Desktop on Windows: where the Docker VM sees `SHELTER_DATA_DIR/depot` |
 | `SHELTER_MAP_SOURCE` | newest Protomaps daily build | PMTiles URL that map downloads are cut from |
 
-Running from source, the server reads `PORT`, `HOST` (`127.0.0.1`, or `0.0.0.0` with `--lan`), `SHELTER_DATA` (`./data`), `SHELTER_NET_CHECK`, `SHELTER_REMOTE_ADMIN`, `SHELTER_AI_URL` and `SHELTER_MAP_SOURCE`.
+Running from source, the server reads `PORT`, `HOST` (`127.0.0.1`, or `0.0.0.0` with `--lan`), `SHELTER_DATA` (`./data`), `SHELTER_NET_CHECK`, `SHELTER_REMOTE_ADMIN`, `SHELTER_AI_URL`, `SHELTER_MAP_SOURCE` and `SHELTER_HTTPS` (or `--https`).
+
+Also: `SHELTER_POWER_CHECK=off` disables battery/UPS reading, and `SHELTER_NUT=ups[@host[:port]]` reads a NUT UPS. The Depot content catalog is `config/content.json`; put overrides (matched by `id`) in `config/content.custom.json`.
 
 ## Backups
 

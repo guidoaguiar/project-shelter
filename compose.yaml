@@ -23,6 +23,8 @@ services:
       SHELTER_DEPOT_HOST_DIR: ${SHELTER_DEPOT_HOST_DIR:-}
       SHELTER_HOSTNAME: ${SHELTER_HOSTNAME:-}
       SHELTER_REMOTE_ADMIN: ${SHELTER_REMOTE_ADMIN:-0}
+      # 1 = HTTPS with a self-signed certificate kept in /data/tls, so phones can use GPS and offline mode.
+      SHELTER_HTTPS: ${SHELTER_HTTPS:-0}
       # Owner given to the service folders the Depot creates (uid or uid:gid, "off" to skip).
       SHELTER_DEPOT_UID: ${SHELTER_DEPOT_UID:-1000}
       SHELTER_NET_CHECK: ${SHELTER_NET_CHECK:-1.1.1.1:443}

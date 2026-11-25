@@ -247,6 +247,15 @@ export class Manual {
     return chunks.toSorted((x, y) => y.score - x.score).slice(0, limit);
   }
 
+  /** Every passage of every entry ({ article, heading, text }), for the Advisor's embedding index. */
+  chunks() {
+    this.reload();
+    if (this.chunked?.signature !== this.signature) {
+      this.chunked = { signature: this.signature, list: this.articles.flatMap((a) => passagesOf(a.body).map(({ heading, text }) => ({ article: a, heading, text }))) };
+    }
+    return this.chunked.list;
+  }
+
   /** How well one passage matches the expanded query terms (saturating term frequency times IDF). */
   #passageScore(text, expanded) {
     const N = this.articles.length;

@@ -239,3 +239,27 @@ test('manual sections print whole, and the new content is there', async () => {
   assert.ok(water.json.length > 1 && water.json.every((a) => a.category === 'WATER' && a.body));
   assert.equal((await request('GET', '/api/manual/section/NOPE')).status, 404);
 });
+
+test('power: status carries battery state; low-power mode turns the advisor off', async () => {
+  const s = await request('GET', '/api/status');
+  assert.equal(typeof s.json.power.present, 'boolean');
+  assert.equal(s.json.power.lowPower, false);
+  assert.equal(s.json.system.lowPower, false);
+  assert.equal((await request('PUT', '/api/settings', { body: { power: { lowPower: true } } })).json.power.lowPower, true);
+  const low = await request('GET', '/api/status');
+  assert.deepEqual([low.json.power.lowPower, low.json.system.lowPower, low.json.ai.online], [true, true, false]);
+  const chat = await request('POST', '/api/chat', { body: { messages: [{ role: 'user', content: 'water' }] } });
+  assert.equal(chat.status, 503);
+  assert.match(chat.json.error, /low-power/);
+  assert.equal((await request('PUT', '/api/settings', { body: { power: { batteryWh: 'lots' } } })).status, 400);
+  assert.equal((await request('PUT', '/api/settings', { body: { power: { lowPower: false } } })).json.power.lowPower, false);
+});
+
+test('check-in: saved, validated and read back', async () => {
+  assert.equal((await request('GET', '/api/checkin')).json.startedAt, null);
+  const body = { startedAt: '2026-01-01T10:00:00.000Z', allOk: true, people: [{ name: 'Ana', ok: true, at: '2026-01-01T10:02:00.000Z' }] };
+  assert.equal((await request('PUT', '/api/checkin', { body })).status, 200);
+  const back = await request('GET', '/api/checkin');
+  assert.deepEqual([back.json.allOk, back.json.people[0].name], [true, 'Ana']);
+  assert.equal((await request('PUT', '/api/checkin', { body: { startedAt: 'soon' } })).status, 400);
+});

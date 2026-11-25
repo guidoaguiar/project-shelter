@@ -5,15 +5,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
-/** Runs the Docker CLI with an argv array (no shell). Resolves { code, out, err }; never rejects. */
-export function runDocker(args, timeout = 8000) {
+/**
+ * Runs the Docker CLI with an argv array (no shell). Resolves { code, out, err }; never rejects.
+ * signal: an AbortSignal that stops the CLI early (for long `docker exec` imports).
+ */
+export function runDocker(args, timeout = 8000, { signal } = {}) {
   return new Promise((resolve) => {
     let out = '', err = '';
     let child;
     // The Docker CLI is found through PATH on purpose: its install location differs between Linux
     // packages, Docker Desktop and the Shelter container image.
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- see above
-    try { child = spawn('docker', args, { windowsHide: true }); } catch (error) { return resolve({ code: -1, out, err: error.message }); }
+    try { child = spawn('docker', args, { windowsHide: true, signal }); } catch (error) { return resolve({ code: -1, out, err: error.message }); }
     const timer = setTimeout(() => child.kill(), timeout);
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { err += d; });
